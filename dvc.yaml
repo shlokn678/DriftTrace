@@ -1,0 +1,29 @@
+# DriftTrace DVC pipeline (FR-1, FR-6.4).
+# Stages wrap the same library functions the CLI and Airflow DAG call.
+stages:
+  generate:
+    cmd: python -m drifttrace.cli.main build-dataset --n-rows 5000 --seed 42
+    deps:
+      - src/drifttrace/data/generator.py
+      - src/drifttrace/data/build.py
+      - config/schema.yaml
+    outs:
+      - data/dataset.csv
+    metrics:
+      - data/validation_report.json:
+          cache: false
+
+  train:
+    cmd: python -m drifttrace.cli.main run-pipeline
+    deps:
+      - data/dataset.csv
+      - src/drifttrace/training/train.py
+      - src/drifttrace/training/pipeline.py
+      - src/drifttrace/features/transform.py
+      - config/graph.yaml
+    outs:
+      - artifacts/baseline.json:
+          cache: false
+    metrics:
+      - artifacts/run_manifest.json:
+          cache: false

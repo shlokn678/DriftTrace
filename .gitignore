@@ -26,3 +26,9 @@ mlflow.db
 # OS/editor
 .DS_Store
 Thumbs.db
+# DVC local remote storage
+/.dvc-storage
+# MLflow SQLite backend + artifacts
+mlartifacts/
+# pytest junit
+test-results.xml

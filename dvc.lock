@@ -1,0 +1,58 @@
+schema: '2.0'
+stages:
+  generate:
+    cmd: python -m drifttrace.cli.main build-dataset --n-rows 5000 --seed 42
+    deps:
+    - path: config/schema.yaml
+      hash: md5
+      md5: f8af90d36f2c7526e3f05e77f9f07b04
+      size: 560
+    - path: src/drifttrace/data/build.py
+      hash: md5
+      md5: 94358915b56fb02301081ff91c3c8796
+      size: 1847
+    - path: src/drifttrace/data/generator.py
+      hash: md5
+      md5: c1d004708cad13cdfdd86886d8747e59
+      size: 4589
+    outs:
+    - path: data/dataset.csv
+      hash: md5
+      md5: bb9fc0051a2c789e7bae4b326dc31860
+      size: 178342
+    - path: data/validation_report.json
+      hash: md5
+      md5: c445ac0ea2f467645fc437914b3a05b8
+      size: 176
+  train:
+    cmd: python -m drifttrace.cli.main run-pipeline
+    deps:
+    - path: config/graph.yaml
+      hash: md5
+      md5: 1e8afe9ec7cf9d53df8f1571aaba4fc2
+      size: 661
+    - path: data/dataset.csv
+      hash: md5
+      md5: bb9fc0051a2c789e7bae4b326dc31860
+      size: 178342
+    - path: src/drifttrace/features/transform.py
+      hash: md5
+      md5: 1ba230fcfb336fe23c1f5c5a60cab8dc
+      size: 4106
+    - path: src/drifttrace/training/pipeline.py
+      hash: md5
+      md5: c4198d51839e7664c8bf7148512e5642
+      size: 3158
+    - path: src/drifttrace/training/train.py
+      hash: md5
+      md5: 70ce35ce557e6e0f3a6e968d0ad65377
+      size: 5256
+    outs:
+    - path: artifacts/baseline.json
+      hash: md5
+      md5: 8c7927df5b69b05977e32a769fe8d843
+      size: 396183
+    - path: artifacts/run_manifest.json
+      hash: md5
+      md5: a2131b3863af2219eb92e7a54d957498
+      size: 662

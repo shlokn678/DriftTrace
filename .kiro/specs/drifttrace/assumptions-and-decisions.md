@@ -47,3 +47,13 @@ to change. No credentials, cloud accounts, datasets, or external services are in
 - No third-party notification, tracking, or data services.
 - No external dataset download or paid API.
 - No authentication provider.
+
+
+## Decisions taken during implementation (Phase 0)
+
+| ID | Decision | Rationale | Reversible? |
+| --- | --- | --- | --- |
+| D-29 (supersedes D-27) | Use Python 3.13.5 for the dev environment, not 3.11. | This laptop has 3.10, 3.13, and 3.14 installed but NOT 3.11, and no py-launcher 3.11 runtime. 3.13 is a stable released CPython with full wheel coverage for the core stack (numpy, pandas, scipy, scikit-learn, networkx, pydantic, fastapi, mlflow, pytest). 3.14 was rejected as too new for reliable wheels. `pyproject.toml` keeps `requires-python = ">=3.11"` so 3.11 remains supported where available. | Yes - install 3.11 later and recreate the venv. |
+| D-30 | Airflow is an optional extra (`[orchestration]`), not a core dependency. | Keeps the core library, drift/RCA, and serving installable and testable on Python 3.13 without waiting on Airflow's slower support for new Python versions. Matches the spec principle that Airflow is a thin adapter and the pipeline is CLI-callable without it (FR-6.4). Airflow support on 3.13 will be validated in Phase 2. | Yes |
+| D-31 | Docker is not installed on this laptop; Docker/Compose tasks (Phase 3) will be authored as files and validated by lint/config where possible, with runtime execution deferred to a machine that has Docker. | `docker` is not on PATH here. The spec already provides a broker-free pure-Python path (FR-6.4, NFR-8) so Phases 0-2 and the core of Phase 4 do not need Docker. Flagged so the container runtime step is not silently skipped. | Yes |
+| D-32 | Files are written as UTF-8 without BOM. | Python `tomllib` and many tools reject a BOM at the start of `pyproject.toml`. Enforced repo-wide. | n/a |
