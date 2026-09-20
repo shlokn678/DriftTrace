@@ -1,0 +1,6 @@
+# DriftTrace — responsible-AI config (placeholder; finalized in Phase 4, FR-15)
+fairness:
+  sensitive_attribute: null   # declared explicitly during implementation; never inferred
+privacy:
+  pii_deny_list: [name, email, phone, ssn, address, customer_id]
+  prediction_log_retention_note: "Define retention window during implementation."

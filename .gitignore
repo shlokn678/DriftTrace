@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+# Tooling
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.log
+# MLOps runtime outputs (kept dirs use .keep)
+/data/*
+!/data/.keep
+/artifacts/*
+!/artifacts/.keep
+/reports/*
+!/reports/.keep
+mlruns/
+mlflow.db
+# DVC (initialized during Phase 1)
+/.dvc/cache
+# OS/editor
+.DS_Store
+Thumbs.db
