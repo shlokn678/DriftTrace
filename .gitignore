@@ -32,3 +32,6 @@ Thumbs.db
 mlartifacts/
 # pytest junit
 test-results.xml
+# pytest junit / temp result files
+reg.xml
+reg_result.txt

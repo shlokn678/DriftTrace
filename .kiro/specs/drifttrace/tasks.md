@@ -6,22 +6,22 @@ references requirements from `requirements.md`.
 
 Legend: `[ ]` not started · MVP unless marked `[STRETCH]`/`[FUTURE]`.
 
-## Phase 0 — Project foundation (prerequisite)
-- [ ] 0.1 Initialize Git repo and Python 3.11 project (pyproject, package skeleton). _(NFR-6)_
-- [ ] 0.2 Add lint/format/type/test tooling config (ruff, black, mypy, pytest). _(NFR-6, FR-16.4)_
-- [ ] 0.3 Add `.env.example`, config file stubs (`graph.yaml`, `schema.yaml`, `drift.yaml`, `governance.yaml`). _(design §13, NFR-7)_
-- [ ] 0.4 Author README skeleton + docs index. _(NFR-10)_
+## Phase 0 — Project foundation (prerequisite) — DONE (commit 269d237)
+- [x] 0.1 Initialize Git repo and Python 3.11 project (pyproject, package skeleton). _(NFR-6)_ — used Python 3.13.5 (D-29; 3.11 not installed).
+- [x] 0.2 Add lint/format/type/test tooling config (ruff, black, mypy, pytest). _(NFR-6, FR-16.4)_
+- [x] 0.3 Add `.env.example`, config file stubs (`graph.yaml`, `schema.yaml`, `drift.yaml`, `governance.yaml`). _(design §13, NFR-7)_
+- [x] 0.4 Author README skeleton + docs index. _(NFR-10)_
 
-## Phase 1 — Reproduce (Data + Track) `[PITCH Phase 1: DVC + MLflow + validation]`
-- [ ] 1.1 Deterministic seeded data generator with chained features. _(FR-1.4, NFR-12)_
-- [ ] 1.2 Declared schema + validator + validation report. _(FR-2)_
-- [ ] 1.3 Initialize DVC with local remote; track dataset/model artifacts; `dvc.yaml` stages. _(FR-1)_
-- [ ] 1.4 Feature transform module (shared by train/serve). _(FR-3)_
-- [ ] 1.5 Graph loader (`graph.yaml` -> NetworkX) with validation + traversal API. _(FR-8)_
-- [ ] 1.6 Feature/graph consistency check. _(FR-3.2)_
-- [ ] 1.7 Training + evaluation (deterministic split, metrics, gate, artifact). _(FR-4)_
-- [ ] 1.8 MLflow tracking + model registry integration; record lifecycle evidence. _(FR-5, FR-17)_
-- [ ] 1.9 Versioned drift baseline per model version. _(FR-9.2/9.3)_
+## Phase 1 — Reproduce (Data + Track) `[PITCH Phase 1: DVC + MLflow + validation]` — DONE (commit bfd6c0f)
+- [x] 1.1 Deterministic seeded data generator with chained features. _(FR-1.4, NFR-12)_
+- [x] 1.2 Declared schema + validator + validation report. _(FR-2)_
+- [x] 1.3 Initialize DVC with local remote; track dataset/model artifacts; `dvc.yaml` stages. _(FR-1)_ — `dvc repro` runs generate->train end to end.
+- [x] 1.4 Feature transform module (shared by train/serve). _(FR-3)_
+- [x] 1.5 Graph loader (`graph.yaml` -> NetworkX) with validation + traversal API. _(FR-8)_
+- [x] 1.6 Feature/graph consistency check. _(FR-3.2)_
+- [x] 1.7 Training + evaluation (deterministic split, metrics, gate, artifact). _(FR-4)_
+- [x] 1.8 MLflow tracking + model registry integration; record lifecycle evidence. _(FR-5, FR-17)_ — SQLite backend (D-6); cloudpickle serialization.
+- [x] 1.9 Versioned drift baseline per model version. _(FR-9.2/9.3)_
 
 ## Phase 2 — Automate (DAG + CI) `[PITCH Phase 2: Airflow DAG + CI tests]`
 - [ ] 2.1 CLI wrapping library functions (`run-pipeline`, etc.). _(FR-6.4)_
