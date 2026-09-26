@@ -19,6 +19,7 @@ is unauthenticated and intended for localhost / the internal Compose network (FR
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import pandas as pd
@@ -33,6 +34,7 @@ from drifttrace.serving.schemas import (
     PredictRequest,
     PredictResponse,
     ReadyResponse,
+    RunScenarioRequest,
 )
 from drifttrace.streaming.event import PredictionEvent, new_event_id
 from drifttrace.streaming.source import EventSink
@@ -165,6 +167,19 @@ def create_app(settings: ServingSettings | None = None) -> Any:
     app.state.holder = holder
     app.state.sink = sink
 
+    # CORS for the local operations dashboard (dev + internal Compose network only).
+    # Not a public API (FR-7.6). Allowed origins are configurable via env.
+    from fastapi.middleware.cors import CORSMiddleware
+
+    origins = settings.cors_allow_origins
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(status="ok")
@@ -249,7 +264,76 @@ def create_app(settings: ServingSettings | None = None) -> Any:
 
         return PlainTextResponse(METRICS.to_prometheus())
 
+    @app.get("/demo/scenarios")
+    def demo_scenarios() -> dict:
+        """List the deterministic drift-injection scenarios (FR-18)."""
+        from drifttrace.streaming.demo import SCENARIOS
+
+        return {"scenarios": list(SCENARIOS)}
+
+    @app.post("/demo/run-scenario")
+    def demo_run_scenario(req: RunScenarioRequest) -> dict:
+        """Run a deterministic scenario through the REAL Phase 4 pipeline (FR-18, FR-9/10/11).
+
+        This is a thin HTTP wrapper over the exact same drift -> RCA -> report -> alert
+        pipeline the CLI `replay` uses. It generates deterministic events (values only;
+        the detector decides drift), runs the monitor windower + Phase4Processor, writes
+        the monitoring report + latest_rca.json, and returns the outcome. No fabricated
+        results: KS/PSI and RCA produce the verdicts.
+        """
+        return run_demo_scenario(settings, req.scenario, n=req.n, seed=req.seed)
+
     return app
+
+
+def run_demo_scenario(
+    settings: ServingSettings, scenario: str, *, n: int = 300, seed: int = 7
+) -> dict:
+    """Execute a deterministic scenario through the real Phase 4 pipeline."""
+    from drifttrace.alerting.alerter import Alerter
+    from drifttrace.alerting.webhook import WebhookClient
+    from drifttrace.config import get_paths
+    from drifttrace.drift.baseline import Baseline
+    from drifttrace.drift.config import load_drift_config
+    from drifttrace.graph.loader import load_graph
+    from drifttrace.streaming.demo import SCENARIOS, generate_events
+    from drifttrace.streaming.processing import run_scenario_over_events
+
+    if scenario not in SCENARIOS:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=422, detail=f"unknown scenario '{scenario}'")
+
+    paths = get_paths()
+    baseline = Baseline.load(paths.artifacts / "baseline.json")
+    graph = load_graph()
+    config = load_drift_config()
+
+    webhook_url = os.environ.get("WEBHOOK_STUB_URL")
+    webhook = WebhookClient(webhook_url) if webhook_url else None
+    alerter = Alerter(
+        webhook=webhook,
+        cooldown_seconds=0,  # demo: always emit so the UI shows the alert
+        alert_log_path=settings.reports_dir_path / "alerts.jsonl",
+    )
+    model_version = str(baseline.model_version) if baseline.model_version is not None else None
+    events = generate_events(scenario, n=n, seed=seed, model_version=model_version)
+    outcomes = run_scenario_over_events(
+        events,
+        baseline,
+        graph,
+        config,
+        alerter=alerter,
+        reports_dir=settings.reports_dir_path,
+        window_size=n,
+        min_window_samples=30,
+    )
+    outcome = outcomes[-1] if outcomes else None
+    return {
+        "scenario": scenario,
+        "windows": len(outcomes),
+        "outcome": outcome.to_dict() if outcome is not None else None,
+    }
 
 
 def _explain_background(holder: ModelHolder) -> pd.DataFrame:

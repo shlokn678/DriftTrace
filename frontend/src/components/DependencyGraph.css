@@ -1,0 +1,92 @@
+.depgraph {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.depgraph__row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 320px;
+}
+
+.depnode {
+  width: 100%;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.depnode:hover { transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+
+.depnode__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.depnode__name {
+  font-weight: 700;
+  font-size: 0.98rem;
+  color: var(--navy);
+}
+
+.depnode__status {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--text-tertiary);
+}
+
+.depnode__badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--status-root);
+  color: #fff;
+}
+
+.depgraph__edge {
+  color: var(--border);
+  height: 40px;
+  display: grid;
+  place-items: center;
+}
+
+/* Status treatments - restrained, root cause strongest */
+.depnode--stable { border-color: var(--status-stable); background: var(--status-stable-surface); }
+.depnode--stable .depnode__status { color: var(--status-stable); }
+
+.depnode--warning { border-color: var(--status-warning); background: var(--status-warning-surface); }
+.depnode--warning .depnode__status { color: var(--status-warning); }
+
+.depnode--drift { border-color: var(--status-drift); background: var(--status-drift-surface); }
+.depnode--drift .depnode__status { color: var(--status-drift); }
+
+.depnode--insufficient { border-color: var(--border); background: var(--status-insufficient-surface); }
+
+.depnode--root {
+  border: 2px solid var(--status-root);
+  background: var(--status-root-surface);
+  box-shadow: 0 8px 26px rgba(155, 44, 44, 0.16);
+}
+.depnode--root .depnode__name { color: var(--status-root); }
+.depnode--root .depnode__status { color: var(--status-root); }
+
+.depnode--output { border-style: dashed; color: var(--text-tertiary); }
+.depnode--unknown { opacity: 0.85; }
+
+/* Edge turns warm when drift has propagated downstream */
+.depgraph__row:has(.depnode--root) + .depgraph__row .depgraph__edge,
+.depnode--drift ~ .depgraph__edge { color: var(--status-drift); }

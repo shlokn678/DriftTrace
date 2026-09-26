@@ -36,6 +36,7 @@ class ServingSettings:
     event_log_path: Path
     transform_params_path: Path
     reports_dir_path: Path
+    cors_allow_origins: list[str]
 
     def load_transform_params(self) -> TransformParams:
         """Load transform params persisted by the training pipeline (FR-3.3).
@@ -75,4 +76,12 @@ def get_serving_settings() -> ServingSettings:
             )
         ),
         reports_dir_path=Path(os.environ.get("DRIFTTRACE_REPORTS_DIR", str(paths.reports))),
+        cors_allow_origins=[
+            o.strip()
+            for o in os.environ.get(
+                "DRIFTTRACE_CORS_ORIGINS",
+                "http://localhost:5173,http://localhost:4173,http://127.0.0.1:5173",
+            ).split(",")
+            if o.strip()
+        ],
     )

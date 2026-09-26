@@ -33,6 +33,7 @@ def trained_env(tmp_path):
         event_log_path=event_log,
         transform_params_path=tmp_path / "artifacts" / "transform_params.json",
         reports_dir_path=tmp_path / "reports",
+        cors_allow_origins=["http://localhost:5173"],
     )
     return settings, event_log
 
@@ -168,3 +169,85 @@ def test_explain_off_hot_path_predict_has_no_attributions(client) -> None:
     c, _ = client
     predict = c.post("/predict", json={"income": 4000.0}).json()
     assert "attributions" not in predict  # /predict never computes explanations
+
+
+# --- Demo scenario endpoints (real Phase 4 pipeline over HTTP) -------------------------
+@pytest.fixture
+def demo_env(tmp_path, monkeypatch):
+    """Full temp root: dataset + trained model + baseline + config, via DRIFTTRACE_ROOT."""
+    monkeypatch.setenv("DRIFTTRACE_ROOT", str(tmp_path))
+    (tmp_path / "config").mkdir()
+    from drifttrace.config import _repo_root
+
+    for name in ["schema.yaml", "graph.yaml", "drift.yaml", "governance.yaml"]:
+        src = _repo_root() / "config" / name
+        (tmp_path / "config" / name).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+
+    from drifttrace.data.build import build_dataset
+    from drifttrace.training.pipeline import run_training_pipeline
+    from drifttrace.training.train import TrainConfig
+
+    build_dataset(n_rows=1500, seed=42, out_dir=tmp_path / "data")
+    tracking_uri = f"sqlite:///{(tmp_path / 'mlflow.db').as_posix()}"
+    run_training_pipeline(
+        dataset_path=tmp_path / "data" / "dataset.csv",
+        config=TrainConfig(seed=42, min_roc_auc=0.6),
+        tracking_uri=tracking_uri,
+        artifacts_dir=tmp_path / "artifacts",
+    )
+    from drifttrace.serving.config import get_serving_settings
+
+    return get_serving_settings()
+
+
+@pytest.mark.integration
+def test_demo_scenarios_lists_four(demo_env) -> None:
+    from fastapi.testclient import TestClient
+
+    from drifttrace.serving.app import create_app
+
+    with TestClient(create_app(demo_env)) as c:
+        body = c.get("/demo/scenarios").json()
+        assert set(body["scenarios"]) == {"control", "income_annual", "mid_chain", "two_roots"}
+
+
+@pytest.mark.integration
+def test_demo_control_no_root_cause(demo_env) -> None:
+    from fastapi.testclient import TestClient
+
+    from drifttrace.serving.app import create_app
+
+    with TestClient(create_app(demo_env)) as c:
+        body = c.post("/demo/run-scenario", json={"scenario": "control", "n": 300}).json()
+        assert body["scenario"] == "control"
+        assert body["outcome"]["has_root_cause"] is False
+        assert body["outcome"]["root_cause_candidates"] == []
+
+
+@pytest.mark.integration
+def test_demo_income_annual_root_cause_income(demo_env) -> None:
+    from fastapi.testclient import TestClient
+
+    from drifttrace.serving.app import create_app
+
+    with TestClient(create_app(demo_env)) as c:
+        body = c.post("/demo/run-scenario", json={"scenario": "income_annual", "n": 300}).json()
+        out = body["outcome"]
+        assert "income" in out["drifted_nodes"]
+        assert out["root_cause_candidates"] == ["income"]
+        assert set(out["symptoms"]).issubset({"credit_score", "risk_score"})
+        # After running, /rca/latest reflects the persisted report.
+        latest = c.get("/rca/latest").json()
+        assert latest["available"] is True
+        assert latest["report"]["rca"]["has_root_cause"] is True
+
+
+@pytest.mark.integration
+def test_demo_unknown_scenario_422(demo_env) -> None:
+    from fastapi.testclient import TestClient
+
+    from drifttrace.serving.app import create_app
+
+    with TestClient(create_app(demo_env)) as c:
+        resp = c.post("/demo/run-scenario", json={"scenario": "nope", "n": 300})
+        assert resp.status_code == 422

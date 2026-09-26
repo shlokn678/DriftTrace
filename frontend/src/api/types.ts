@@ -1,0 +1,172 @@
+// Typed shapes for the real DriftTrace backend responses.
+// Derived from src/drifttrace/serving/schemas.py and the Phase 4 report/RCA/explain dicts.
+
+export type Verdict = "STABLE" | "WARNING" | "DRIFT" | "INSUFFICIENT_DATA";
+export type NodeClass =
+  | "ROOT_CAUSE"
+  | "SYMPTOM"
+  | "WARNING"
+  | "STABLE"
+  | "INSUFFICIENT_DATA";
+
+export interface HealthResponse {
+  status: string;
+}
+
+export interface ReadyResponse {
+  ready: boolean;
+  model_version: string | null;
+  detail: string;
+}
+
+export interface ModelInfoResponse {
+  model_version: string | null;
+  model_name: string;
+  features: string[];
+  loaded: boolean;
+}
+
+export interface PredictResponse {
+  request_id: string | null;
+  model_version: string | null;
+  prediction: number;
+  probability: number;
+  features: Record<string, number>;
+  event_emitted: boolean;
+}
+
+// ---- KS / PSI evidence ----
+export interface KSEvidence {
+  node: string;
+  window_id: string;
+  baseline_version: string;
+  current_n: number;
+  baseline_n: number;
+  statistic: number | null;
+  p_value: number | null;
+  threshold: number;
+  verdict: Verdict;
+}
+
+export interface PSIBin {
+  label: string;
+  baseline_prop: number;
+  current_prop: number;
+  contribution: number;
+}
+
+export interface PSIEvidence {
+  node: string;
+  window_id: string;
+  baseline_version: string;
+  current_n: number;
+  baseline_n: number;
+  psi: number | null;
+  bins: PSIBin[];
+  psi_warning: number;
+  psi_drift: number;
+  verdict: Verdict;
+}
+
+export interface NodeDriftResult {
+  node: string;
+  verdict: Verdict;
+  ks: KSEvidence | null;
+  psi: PSIEvidence | null;
+}
+
+export interface DriftReport {
+  window_id: string;
+  baseline_version: string;
+  nodes: Record<string, NodeDriftResult>;
+  drifted_nodes: string[];
+}
+
+export interface RootCauseCandidate {
+  node: string;
+  severity: number;
+  symptom_path: string[];
+  evidence: Record<string, unknown>;
+}
+
+export interface RCAResult {
+  window_id: string;
+  baseline_version: string;
+  has_root_cause: boolean;
+  root_cause_candidates: RootCauseCandidate[];
+  symptoms: string[];
+  drifted_nodes: string[];
+}
+
+export interface AlertRecord {
+  incident_id: string;
+  root_cause: string;
+  model_version: string;
+  window_id: string;
+  symptom_path: string[];
+  evidence: Record<string, unknown>;
+  timestamp: number;
+  delivered: boolean;
+  delivery_status: string;
+}
+
+export interface MonitoringReport {
+  report_id: string;
+  window_id: string;
+  incident_id: string | null;
+  model_version: string;
+  baseline_version: string;
+  dataset_version: string | null;
+  code_commit: string | null;
+  timestamp: string;
+  classifications: Record<string, NodeClass>;
+  drift: DriftReport;
+  rca: RCAResult;
+  alerts: AlertRecord[];
+}
+
+export interface RcaLatestResponse {
+  available: boolean;
+  detail?: string;
+  report?: MonitoringReport;
+}
+
+// ---- Explain ----
+export interface Attribution {
+  feature: string;
+  value: number;
+  attribution: number;
+}
+
+export interface Explanation {
+  method: "shap" | "lime";
+  scope: "local" | "global";
+  model_version: string | null;
+  features: string[];
+  attributions: Attribution[];
+  base_value: number | null;
+  caveat: string;
+}
+
+// ---- Demo scenario ----
+export type ScenarioName = "control" | "income_annual" | "mid_chain" | "two_roots";
+
+export interface ScenarioOutcome {
+  window_id: string;
+  drifted_nodes: string[];
+  has_root_cause: boolean;
+  root_cause_candidates: string[];
+  symptoms: string[];
+  report_id: string;
+  alerts: AlertRecord[];
+  report_paths: Record<string, string>;
+}
+
+export interface RunScenarioResponse {
+  scenario: ScenarioName;
+  windows: number;
+  outcome: ScenarioOutcome | null;
+}
+
+// ---- Metrics ----
+export type Metrics = Record<string, number>;

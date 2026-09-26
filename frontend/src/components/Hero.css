@@ -1,0 +1,23 @@
+.hero {
+  padding-top: var(--space-8);
+}
+
+.hero__text {
+  max-width: 760px;
+}
+
+.hero h1 {
+  margin-top: var(--space-4);
+}
+
+.hero__lede {
+  margin-top: var(--space-5);
+  font-size: 1.12rem;
+  line-height: 1.6;
+  max-width: 640px;
+}
+
+@media (max-width: 640px) {
+  .hero { padding-top: var(--space-6); }
+  .hero__lede { font-size: 1rem; }
+}

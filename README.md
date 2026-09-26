@@ -63,6 +63,24 @@ The main demo (monthly->annual income) yields `income` as the root cause with
 Prometheus and Grafana are deferred as stretch work; only the `/metrics` interface is
 provided in this phase.
 
+## Operations Dashboard (frontend)
+A React + TypeScript + Vite dashboard in `frontend/` provides a presentation-ready
+operations view on top of the real Phase 4 backend (health/readiness, model info, the
+dependency graph with root-cause/symptom highlighting, KS/PSI diagnostics, the latest
+incident, SHAP/LIME explanations, operator controls, and `/metrics`). It consumes real
+backend outputs only. Quickstart:
+```
+# 1. ensure a model exists and start the API
+.\.venv\Scripts\python.exe -m drifttrace.cli.main run-pipeline --seed 42 --min-roc-auc 0.6
+.\.venv\Scripts\python.exe -m uvicorn drifttrace.serving.app:create_app --factory --port 8000
+# 2. run the dashboard
+cd frontend && npm install && npm run dev   # http://localhost:5173
+```
+See `frontend/README.md` for details. Two demo endpoints were added to the serving app
+(`POST /demo/run-scenario`, `GET /demo/scenarios`) that run the existing real KS/PSI +
+graph RCA pipeline so the dashboard's "Run Normal / Simulate Income Drift" buttons drive
+genuine backend analysis.
+
 ## Notes
 - Not yet connected to GitHub.
 - No cloud accounts, credentials, external datasets, or paid APIs are required or configured.

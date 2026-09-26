@@ -30,6 +30,17 @@ class ExplainRequest(BaseModel):
     method: str = Field("shap", description="'shap' (primary) or 'lime' (secondary)")
 
 
+class RunScenarioRequest(BaseModel):
+    """Request to run a deterministic drift-injection scenario (FR-18)."""
+
+    scenario: str = Field(
+        "control",
+        description="control | income_annual | mid_chain | two_roots",
+    )
+    n: int = Field(300, ge=30, le=5000, description="events to generate")
+    seed: int = Field(7, description="deterministic seed")
+
+
 class PredictResponse(BaseModel):
     """A single prediction response (FR-7 AC-3)."""
 
