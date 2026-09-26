@@ -23,11 +23,11 @@ Legend: `[ ]` not started · MVP unless marked `[STRETCH]`/`[FUTURE]`.
 - [x] 1.8 MLflow tracking + model registry integration; record lifecycle evidence. _(FR-5, FR-17)_ — SQLite backend (D-6); cloudpickle serialization.
 - [x] 1.9 Versioned drift baseline per model version. _(FR-9.2/9.3)_
 
-## Phase 2 — Automate (DAG + CI) `[PITCH Phase 2: Airflow DAG + CI tests]`
-- [ ] 2.1 CLI wrapping library functions (`run-pipeline`, etc.). _(FR-6.4)_
-- [ ] 2.2 Airflow DAG `ingest -> validate -> drift-check -> report / retrain` with approval gate. _(FR-6)_
-- [ ] 2.3 GitHub Actions: lint, type, unit, schema tests. _(FR-16.1/16.4)_
-- [ ] 2.4 CI runs broker-free / Airflow-free / credential-free. _(FR-16.2)_
+## Phase 2 — Automate (DAG + CI) `[PITCH Phase 2: Airflow DAG + CI tests]` — DONE
+- [x] 2.1 CLI wrapping library functions (`run-pipeline`, etc.). _(FR-6.4)_ — added `ingest`, `validate`, `drift-check`, `report`, `retrain --approve`, `run-dag`.
+- [x] 2.2 Airflow DAG `ingest -> validate -> drift-check -> report / retrain` with approval gate. _(FR-6)_ — thin wrapper over `orchestration/stages.py`; retrain gated on approval (D-34). Airflow runtime is POSIX-only, so validated at code level on Windows (D-36); runs on Linux/WSL/Docker.
+- [x] 2.3 GitHub Actions: lint, format, type, unit, schema tests. _(FR-16.1/16.4)_ — `.github/workflows/ci.yml` (Python 3.11 + 3.13).
+- [x] 2.4 CI runs broker-free / Airflow-free / credential-free. _(FR-16.2)_ — installs only `.[dev,tracking]`; no broker/Airflow/Docker/secrets (D-37).
 
 ## Phase 3 — Deploy (API + Docker + streaming) `[PITCH Phase 3: FastAPI + Docker + Kafka]`
 - [ ] 3.1 FastAPI service: `/health`, `/ready`, `/predict`, `/model-info`; load model by version; request logging. _(FR-7)_

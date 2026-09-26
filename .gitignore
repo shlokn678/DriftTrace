@@ -35,3 +35,5 @@ test-results.xml
 # pytest junit / temp result files
 reg.xml
 reg_result.txt
+# Isolated Airflow validation venv (Phase 2; not part of the deliverable)
+/.venv-airflow
