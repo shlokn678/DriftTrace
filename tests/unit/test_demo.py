@@ -38,9 +38,13 @@ def test_unknown_scenario_raises() -> None:
 
 @pytest.mark.unit
 def test_write_demo_datasets(tmp_path) -> None:
+    # Phase 4 harness writes all four scenario files.
+    from drifttrace.streaming.demo import CONTROL, INCOME_ANNUAL, MID_CHAIN, TWO_ROOTS
+
     paths = write_demo_datasets(tmp_path, n=30, seed=7)
-    assert paths["normal"].exists()
-    assert paths["drift"].exists()
+    for scenario in (CONTROL, INCOME_ANNUAL, MID_CHAIN, TWO_ROOTS):
+        assert scenario in paths
+        assert paths[scenario].exists()
 
 
 @pytest.mark.unit

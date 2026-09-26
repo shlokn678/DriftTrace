@@ -51,8 +51,17 @@ The `full` profile adds Redpanda + the streaming monitor + webhook stub. See
 `docs/runbook.md` for the complete build / run / demo-replay / verify / logs / stop /
 cleanup commands, including the deterministic normal and simulated-drift replays.
 
-Note: the simulated-drift replay is Phase 3 demo input to exercise the event pipeline;
-actual KS/PSI drift detection and RCA are Phase 4 and are not implemented yet.
+## Phase 4 — Drift detection, RCA, alerting (Operate)
+Phase 4 adds the real intelligence: per-node KS + PSI drift detection, graph-based
+root-cause analysis, root-cause-only alerting with cool-down, monitoring reports
+(JSON + Markdown), SHAP/LIME explainability, fairness/privacy governance, operator
+rollback/retrain with an audit trail, and a Prometheus-compatible `/metrics` endpoint.
+The main demo (monthly->annual income) yields `income` as the root cause with
+`credit_score`/`risk_score` as downstream symptoms and exactly one alert. See
+`docs/runbook.md` (Phase 4 section) for exact commands.
+
+Prometheus and Grafana are deferred as stretch work; only the `/metrics` interface is
+provided in this phase.
 
 ## Notes
 - Not yet connected to GitHub.

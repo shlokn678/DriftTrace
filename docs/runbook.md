@@ -122,3 +122,93 @@ With the stack up, the MLflow tracking/registry UI is at http://localhost:5000.
   network only (FR-7.6). Do not expose it publicly as-is.
 - The MLflow server image is pinned to match the client version so the shared SQLite
   store migrates cleanly.
+
+
+---
+
+# Phase 4 — Drift detection, RCA, alerting (Operate)
+
+Phase 4 turns the Phase 3 infrastructure into the real DriftTrace intelligence:
+`prediction events -> window -> KS+PSI drift -> per-node verdicts -> declared graph ->
+RCA -> root-cause-only alert -> monitoring report -> operator decision`.
+
+Prometheus/Grafana are deferred (stretch); only a `/metrics` endpoint is provided.
+
+## Start the Phase 4 stack
+```
+docker build -f docker/Dockerfile -t drifttrace:latest .
+$env:DRIFTTRACE_USE_REDPANDA = "true"     # full profile emits events to Redpanda
+docker compose -f docker/docker-compose.yml --profile full up -d
+```
+`init` trains + registers the model into the shared volume; `api`, `redpanda`,
+`webhook-stub`, and `monitor` then start.
+
+## Generate the deterministic scenarios (inside the api container)
+```
+docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 `
+  python -m drifttrace.cli.main demo-generate --out /store/reports/demo --n 300 --seed 7
+```
+This writes `events_control.jsonl`, `events_income_annual.jsonl`,
+`events_mid_chain.jsonl`, `events_two_roots.jsonl`.
+
+## Run monitoring on a scenario (drift -> RCA -> report -> alert)
+```
+# Control (expect: no drift, no root cause, no alert)
+docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main `
+  replay --file /store/reports/demo/events_control.jsonl `
+  --webhook-url http://webhook-stub:9000/alert --window-size 300 --min-samples 30
+
+# Main pitch demo: monthly -> annual income (expect: income = root cause; one alert)
+docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main `
+  replay --file /store/reports/demo/events_income_annual.jsonl `
+  --webhook-url http://webhook-stub:9000/alert --window-size 300 --min-samples 30
+
+# Mid-chain drift (expect: credit_score = root cause)
+docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main `
+  replay --file /store/reports/demo/events_mid_chain.jsonl `
+  --webhook-url http://webhook-stub:9000/alert --window-size 300 --min-samples 30
+```
+
+## Check drift results / RCA / reports / alerts
+```
+curl http://localhost:8000/rca/latest                 # latest persisted RCA report
+docker exec drifttrace-api-1 sh -c "ls /store/reports/*.md | head -1 | xargs cat"  # a report
+docker exec drifttrace-api-1 sh -c "cat /store/reports/alerts.jsonl"               # alerts
+curl http://localhost:9000/count                       # webhook stub receipts
+curl http://localhost:9000/received                    # received alert payloads
+```
+
+## Explainability (SHAP / LIME), off the prediction hot path
+```
+curl -X POST http://localhost:8000/explain -H "Content-Type: application/json" -d '{"income": 4200.0, "method": "shap"}'
+curl -X POST http://localhost:8000/explain -H "Content-Type: application/json" -d '{"income": 4200.0, "method": "lime"}'
+# or via the CLI:
+docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main explain --income 4200 --method shap
+```
+
+## Governance (fairness + privacy)
+```
+docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main governance
+```
+
+## Operator actions (approval required; audited)
+```
+# Rejected without approval (exit code 2):
+docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main rollback --to-version 1
+# Approved (audited):
+docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main rollback --to-version 1 --approve --approver alice
+# Retrain requires approval too:
+docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main retrain --approve --approver alice
+docker exec drifttrace-api-1 sh -c "cat /store/reports/audit_log.jsonl"   # audit trail
+```
+
+## Metrics (Prometheus-compatible; no Prometheus/Grafana installed)
+```
+curl http://localhost:8000/metrics
+```
+
+## Stop / clean up
+```
+docker compose -f docker/docker-compose.yml --profile core --profile full down
+docker compose -f docker/docker-compose.yml --profile core --profile full down -v   # also removes model-store
+```

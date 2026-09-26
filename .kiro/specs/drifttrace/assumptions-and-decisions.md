@@ -86,3 +86,15 @@ to change. No credentials, cloud accounts, datasets, or external services are in
 Runtime limitation observed and resolved in Phase 3: the MLflow UI server initially failed
 (schema migration) due to a client/server version mismatch; fixed by pinning the server image to
 v3.16.1 (D-41). No unresolved Phase 3 runtime failures remain.
+
+
+## Decisions taken during implementation (Phase 4)
+
+| ID | Decision | Rationale | Reversible? |
+| --- | --- | --- | --- |
+| D-46 | KS+PSI combine rule is PSI-gated: a node is DRIFT only if PSI >= psi_drift, or KS is significant AND PSI >= psi_warning; KS-significant-but-small-PSI is WARNING (watch, no alert). | The two-sample KS test becomes over-sensitive at large baseline sample sizes and rejects on trivial, practically meaningless differences, producing false DRIFT on control data. PSI is an effect-size measure robust to sample size. Gating on PSI keeps both signals (FR-9.1) while making the control scenario correctly report no drift. Documented in `drift/engine.py`; not a hidden score. | Yes - thresholds/rule are in one place. |
+| D-47 | "Two independent roots" is demonstrated on a genuinely branched graph (unit test), while the linear production chain income->credit_score->risk_score correctly yields a single earliest root. | In a linear chain every downstream drifted node has the earliest node as a transitive ancestor, so it is a SYMPTOM by the RCA rule (FR-10.4), never a co-equal root. Co-equal roots require independent source branches; the RCA engine supports them generically and is tested on a branched graph. The two_roots injection scenario therefore honestly shows income as the single root with risk_score as a symptom. | Yes |
+| D-48 | The monitor's per-window Phase 4 processing (drift->RCA->report->alert) runs in the monitor process/CLI, separate from the API process. Metrics are per-process counters. | Keeps monitoring asynchronous and off the prediction hot path (FR-13.3, NFR-2). The API exposes its own /metrics; the monitor increments the shared registry within its process. A future Prometheus scrape would target each process. | Yes |
+| D-49 | Rollback records the operator decision + target version in the audit trail and expects serving to read the pinned version via `DRIFTTRACE_MODEL_VERSION`; it does not mutate the registry in place. | Deterministic and testable; no automatic/implicit registry changes. Serving already supports pinning a version via env (Phase 3). | Yes |
+| D-50 | The Docker image installs the `explain` extra (SHAP/LIME) so `/explain` works in the container. | `/explain` is a required Phase 4 endpoint; it must actually run in the deployed container, not only on the host. | Yes |
+| D-51 (deferred) | Prometheus and Grafana are NOT installed or configured. Only the Prometheus-compatible `/metrics` text endpoint exists. | Explicitly deferred as stretch per the Phase 4 instructions and FR-19. The interface is future-compatible so a later phase can add scraping/dashboards without code changes. | Yes |

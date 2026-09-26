@@ -39,18 +39,18 @@ Legend: `[ ]` not started · MVP unless marked `[STRETCH]`/`[FUTURE]`.
 - [x] 3.7 CI image build + Compose smoke test (`/health` + one `/predict`). _(FR-16.3, AC-10)_ — `.github/workflows/ci.yml` `docker` job; smoke path verified locally.
 - Deterministic demo/replay (REQUIRED): `streaming/demo.py` + `replay` CLI; normal + simulated-drift event files carried through source -> monitor/window -> webhook. Simulated drift is demo input only; NOT drift detection (Phase 4).
 
-## Phase 4 — Operate (Drift + RCA + Alerts) `[PITCH Phase 4: Prometheus/Grafana + RCA]`
-- [ ] 4.1 Per-node drift detection (KS + PSI, verdicts). _(FR-9)_
-- [ ] 4.2 RCA engine (upstream trace, earliest node, symptom path, evidence). _(FR-10)_
-- [ ] 4.3 Root-cause-only alerting with cool-down + webhook + local persistence. _(FR-11)_
-- [ ] 4.4 Monitoring report (JSON + summary) with lifecycle evidence. _(FR-17)_
-- [ ] 4.5 `/rca/latest` endpoint + `rca show` CLI. _(FR-7.5, FR-12.1)_
-- [ ] 4.6 Operator actions: `rollback --to-version`, `retrain --approve`; audit trail. _(FR-12)_
-- [ ] 4.7 Drift-injection harness (control, monthly->annual income, mid-chain, two-roots). _(FR-18)_
-- [ ] 4.8 Explainability: SHAP (primary) + LIME; `/explain` + global importance. _(FR-14)_
-- [ ] 4.9 Responsible AI: fairness metrics, privacy/PII check, governance checklist. _(FR-15)_
-- [ ] 4.10 `/metrics` endpoint on API + monitor (Prometheus-scrapeable). _(FR-19.3)_
-- [ ] 4.11 `[STRETCH]` Prometheus + Grafana services, dashboards, Grafana alerting. _(FR-19)_
+## Phase 4 — Operate (Drift + RCA + Alerts) `[PITCH Phase 4: Prometheus/Grafana + RCA]` — DONE
+- [x] 4.1 Per-node drift detection (KS + PSI, verdicts). _(FR-9)_ — `drift/ks.py`, `drift/psi.py`, `drift/engine.py`; verdicts STABLE/WARNING/DRIFT/INSUFFICIENT_DATA; documented KS+PSI combine rule (PSI-gated to avoid KS large-sample false positives).
+- [x] 4.2 RCA engine (upstream trace, earliest node, symptom path, evidence). _(FR-10)_ — `rca/engine.py`; co-equal roots on branched graphs.
+- [x] 4.3 Root-cause-only alerting with cool-down + webhook + local persistence. _(FR-11)_ — `alerting/alerter.py`; incident ids; delivery status; webhook failure never crashes.
+- [x] 4.4 Monitoring report (JSON + summary) with lifecycle evidence. _(FR-17)_ — `governance/report.py` (JSON + Markdown; latest_rca.json).
+- [x] 4.5 `/rca/latest` endpoint. _(FR-7.5, FR-12.1)_ — serving reads latest_rca.json.
+- [x] 4.6 Operator actions: `rollback --to-version`, `retrain --approve`; audit trail. _(FR-12)_ — `governance/operator.py` + `governance/audit.py`; approval enforced (exit 2 without), audited.
+- [x] 4.7 Drift-injection harness (control, monthly->annual income, mid-chain, two-roots). _(FR-18)_ — `streaming/demo.py`; values only, detector decides. Verified e2e in the container.
+- [x] 4.8 Explainability: SHAP (primary) + LIME; `/explain` + global importance. _(FR-14)_ — `explain/explainer.py`; off hot path; caveat included; in image.
+- [x] 4.9 Responsible AI: fairness metrics, privacy/PII check, governance evidence. _(FR-15)_ — `governance/fairness.py`, `governance/privacy.py`; declared `group` attribute.
+- [x] 4.10 `/metrics` endpoint (Prometheus-compatible text). _(FR-19.3)_ — `serving/metrics.py`; counters for predictions/events/windows/drift/alerts/etc.
+- [ ] 4.11 `[STRETCH]` Prometheus + Grafana services, dashboards, Grafana alerting. _(FR-19)_ — DEFERRED as stretch (only the /metrics interface exists; no Prometheus/Grafana installed).
 
 ## Phase 5 — Cloud `[PITCH Phase 5: SageMaker; stretch]`
 - [ ] 5.1 `[STRETCH]` Keep image/model cloud-portable; document SageMaker deploy/monitor path (no account configured). _(FR-20)_

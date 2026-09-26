@@ -138,10 +138,17 @@ services:
     profiles: ["full"]
     command: ["monitor", "--window-size", "50", "--min-samples", "10"]
     environment:
+      # DRIFTTRACE_ROOT=/store so the monitor finds the baseline, config/graph, and
+      # writes reports into the shared model-store volume (populated by 'init').
+      DRIFTTRACE_ROOT: "/store"
       REDPANDA_BROKER: "redpanda:9092"
       DRIFTTRACE_TOPIC: "drifttrace.predictions"
       WEBHOOK_STUB_URL: "http://webhook-stub:9000/alert"
+    volumes:
+      - model-store:/store
     depends_on:
+      init:
+        condition: service_completed_successfully
       redpanda:
         condition: service_started
       webhook-stub:

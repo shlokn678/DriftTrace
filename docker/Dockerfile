@@ -13,15 +13,15 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install only what the runtime roles need: the package plus serving + streaming
-# extras (FastAPI/uvicorn/httpx + confluent-kafka). Tracking is included so the API
-# can load the registered model from the MLflow store.
+# Install the runtime extras: serving (FastAPI/uvicorn/httpx) + streaming
+# (confluent-kafka) + tracking (MLflow, to load the registered model) + explain
+# (SHAP/LIME, for the /explain endpoint).
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY config ./config
 
 RUN python -m pip install --upgrade pip \
-    && python -m pip install ".[serving,streaming,tracking]"
+    && python -m pip install ".[serving,streaming,tracking,explain]"
 
 # Copy the entrypoint and make it executable.
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh

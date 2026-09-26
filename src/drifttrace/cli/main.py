@@ -109,6 +109,10 @@ def _cmd_retrain(args: argparse.Namespace) -> int:
     except ApprovalRequired as exc:
         _emit({"stage": "retrain", "ok": False, "detail": {"error": str(exc)}})
         return 2
+    # Record the approved retrain in the audit trail (FR-12, FR-15.3).
+    from drifttrace.governance.audit import record_action
+
+    record_action("retrain", approved=True, approver=args.approver, detail=result.detail)
     _emit(result.to_dict())
     return 0
 
@@ -178,24 +182,51 @@ def _cmd_demo_generate(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_replay(args: argparse.Namespace) -> int:
+def _build_processor(webhook_url: str | None) -> object:
+    """Construct the Phase 4 processor (drift -> RCA -> report -> alert) from config."""
+    from drifttrace.alerting.alerter import Alerter
     from drifttrace.alerting.webhook import WebhookClient
+    from drifttrace.config import get_paths
+    from drifttrace.drift.baseline import Baseline
+    from drifttrace.drift.config import load_drift_config
+    from drifttrace.graph.loader import load_graph
+    from drifttrace.streaming.processing import Phase4Processor
+
+    paths = get_paths()
+    baseline = Baseline.load(paths.artifacts / "baseline.json")
+    graph = load_graph()
+    config = load_drift_config()
+    webhook = WebhookClient(webhook_url) if webhook_url else None
+    alerter = Alerter(
+        webhook=webhook,
+        cooldown_seconds=config.cooldown_seconds,
+        alert_log_path=paths.reports / "alerts.jsonl",
+    )
+    return Phase4Processor(
+        baseline=baseline,
+        graph=graph,
+        config=config,
+        alerter=alerter,
+        reports_dir=paths.reports,
+    )
+
+
+def _cmd_replay(args: argparse.Namespace) -> int:
     from drifttrace.streaming.monitor import Monitor
     from drifttrace.streaming.source import FileReplaySource
     from drifttrace.streaming.window import WindowPolicy
 
     source = FileReplaySource(args.file)
-    webhook = WebhookClient(args.webhook_url) if args.webhook_url else None
+    processor = _build_processor(args.webhook_url)
     policy = WindowPolicy(size=args.window_size, min_samples=args.min_samples)
-    monitor = Monitor(source=source, webhook=webhook, policy=policy)
+    monitor = Monitor(source=source, policy=policy, processor=processor)
     result = monitor.run()
     _emit({"stage": "replay", "file": args.file, **result.to_dict()})
     return 0
 
 
 def _cmd_monitor(args: argparse.Namespace) -> int:
-    """Run the monitor against Redpanda (bounded poll) or a file source."""
-    from drifttrace.alerting.webhook import WebhookClient
+    """Run the Phase 4 monitor against Redpanda (bounded poll) or a file source."""
     from drifttrace.streaming.monitor import Monitor
     from drifttrace.streaming.source import FileReplaySource, RedpandaSource
     from drifttrace.streaming.window import WindowPolicy
@@ -204,11 +235,92 @@ def _cmd_monitor(args: argparse.Namespace) -> int:
         source: object = FileReplaySource(args.file)
     else:
         source = RedpandaSource(brokers=args.brokers, topic=args.topic)
-    webhook = WebhookClient(args.webhook_url) if args.webhook_url else None
+    processor = _build_processor(args.webhook_url)
     policy = WindowPolicy(size=args.window_size, min_samples=args.min_samples)
-    monitor = Monitor(source=source, webhook=webhook, policy=policy)  # type: ignore[arg-type]
+    monitor = Monitor(source=source, policy=policy, processor=processor)  # type: ignore[arg-type]
     result = monitor.run(limit=args.limit)
     _emit({"stage": "monitor", **result.to_dict()})
+    return 0
+
+
+# ---- Phase 4 operator + explainability commands ---------------------------------------
+def _cmd_rollback(args: argparse.Namespace) -> int:
+    from drifttrace.governance.operator import ApprovalRequired, rollback
+
+    try:
+        result = rollback(args.to_version, approved=args.approve, approver=args.approver)
+    except ApprovalRequired as exc:
+        _emit({"stage": "rollback", "ok": False, "detail": {"error": str(exc)}})
+        return 2
+    _emit({"stage": "rollback", **result.to_dict()})
+    return 0
+
+
+def _cmd_explain(args: argparse.Namespace) -> int:
+    from drifttrace.drift.baseline import Baseline  # noqa: F401  (ensures pkg import ok)
+    from drifttrace.explain.explainer import lime_explain_local, shap_explain_local
+    from drifttrace.serving.app import ModelHolder, _explain_background
+    from drifttrace.serving.config import get_serving_settings
+
+    holder = ModelHolder(get_serving_settings())
+    holder.load()
+    if not holder.ready:
+        _emit({"stage": "explain", "ok": False, "detail": {"error": "model not loaded"}})
+        return 1
+    bg = _explain_background(holder)
+    if args.method == "lime":
+        exp = lime_explain_local(
+            holder.model,
+            args.income,
+            holder.transform_params,
+            bg,
+            model_version=holder.model_version,
+        )
+    else:
+        exp = shap_explain_local(
+            holder.model,
+            args.income,
+            holder.transform_params,
+            model_version=holder.model_version,
+            background=bg,
+        )
+    _emit({"stage": "explain", "ok": True, "explanation": exp.to_dict()})
+    return 0
+
+
+def _cmd_governance(args: argparse.Namespace) -> int:
+    """Run fairness + privacy checks over the training dataset + prediction events."""
+    import json
+
+    import pandas as pd
+
+    from drifttrace.config import get_paths
+    from drifttrace.governance.config import load_governance_config
+    from drifttrace.governance.fairness import evaluate_fairness
+    from drifttrace.governance.privacy import check_records
+    from drifttrace.serving.app import ModelHolder
+    from drifttrace.serving.config import get_serving_settings
+
+    paths = get_paths()
+    gov = load_governance_config()
+    holder = ModelHolder(get_serving_settings())
+    holder.load()
+    out: dict = {"stage": "governance"}
+
+    if holder.ready and holder.transform_params is not None:
+        frame = pd.read_csv(paths.data / "dataset.csv")
+        fairness = evaluate_fairness(holder.model, frame, holder.transform_params, gov)
+        out["fairness"] = fairness.to_dict()
+
+    # Privacy check over any persisted prediction events.
+    events_path = paths.reports / "events.jsonl"
+    records = []
+    if events_path.exists():
+        for line in events_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                records.append(json.loads(line))
+    out["privacy"] = check_records(records, gov).to_dict()
+    _emit(out)
     return 0
 
 
@@ -290,6 +402,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_mon.add_argument("--min-samples", type=int, default=50)
     p_mon.add_argument("--limit", type=int, default=None)
     p_mon.set_defaults(func=_cmd_monitor)
+
+    p_rollback = sub.add_parser("rollback", help="operator: roll serving back to a version")
+    p_rollback.add_argument("--to-version", required=True)
+    p_rollback.add_argument("--approve", action="store_true", help="explicit operator approval")
+    p_rollback.add_argument("--approver", default=None)
+    p_rollback.set_defaults(func=_cmd_rollback)
+
+    p_explain = sub.add_parser("explain", help="SHAP (default) or LIME explanation")
+    p_explain.add_argument("--income", type=float, required=True)
+    p_explain.add_argument("--method", default="shap", choices=["shap", "lime"])
+    p_explain.set_defaults(func=_cmd_explain)
+
+    p_gov = sub.add_parser("governance", help="run fairness + privacy governance checks")
+    p_gov.set_defaults(func=_cmd_governance)
 
     return parser
 

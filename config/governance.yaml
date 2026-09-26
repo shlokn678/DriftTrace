@@ -1,6 +1,12 @@
-# DriftTrace — responsible-AI config (placeholder; finalized in Phase 4, FR-15)
+# DriftTrace - responsible-AI config (FR-15).
+# The sensitive attribute is DECLARED explicitly here and never inferred (FR-15.4).
+# It refers to the synthetic 'group' column produced by the local data generator.
 fairness:
-  sensitive_attribute: null   # declared explicitly during implementation; never inferred
+  sensitive_attribute: group   # declared synthetic attribute; values A/B
+  positive_label: 1            # 'default' == 1 is the positive (adverse) outcome
 privacy:
-  pii_deny_list: [name, email, phone, ssn, address, customer_id]
-  prediction_log_retention_note: "Define retention window during implementation."
+  # Fields that must never appear in logs, artifacts, or event payloads (FR-15.5, NFR-9).
+  pii_deny_list: [name, email, phone, ssn, address, customer_id, account_number]
+  prediction_log_retention_note: >
+    Prediction event logs are local JSON-lines for the MVP demo and are not retained
+    beyond the demo run; production would set a bounded retention window.

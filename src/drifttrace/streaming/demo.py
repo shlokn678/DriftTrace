@@ -1,14 +1,23 @@
-"""Deterministic demo/replay data + injector for the Phase 3 infrastructure.
+"""Deterministic drift-injection harness (FR-18) and demo/replay data.
 
-Purpose (Phase 3 ONLY): prove the infrastructure can carry both normal and
-simulated-drift events through source -> monitor/window -> webhook. This is test/demo
-input, NOT drift detection: no KS/PSI, no RCA, no scoring is performed here or in the
-monitor. Phase 4 owns the actual drift algorithms.
+Produces deterministic prediction-event streams for four scenarios so the REAL Phase 4
+KS/PSI detectors and RCA engine can be exercised end to end. The injected scenarios
+change feature VALUES only; they never hard-code a detector verdict - actual KS/PSI on
+the events against the training baseline determine what drifts (FR-18.2).
 
-The "simulated drift" scenario reuses the pitch's motivating failure (monthly->annual
-``income``) purely as a way to make the drift-window events visibly differ from the
-normal ones. The existing trained model remains the model of record; no second model
-is invented.
+Scenarios:
+- control      : income from the training-like distribution -> expected no drift.
+- income_annual: the pitch failure, income x12 (monthly->annual). Because credit_score
+                 and risk_score are DERIVED from income, they move too -> income is the
+                 earliest/root cause, credit_score/risk_score are downstream symptoms.
+- mid_chain    : income normal, but credit_score is shifted directly (and risk follows)
+                 -> credit_score is the earliest supported root, risk_score a symptom.
+- two_roots    : income shifted AND risk_score independently perturbed, with credit_score
+                 kept near-baseline -> two independent roots (income and risk_score).
+
+The existing trained model remains the model of record; no second model is invented.
+Same PredictionEvent schema as the live system, usable with FileReplaySource and the
+Redpanda producer.
 """
 
 from __future__ import annotations
@@ -27,8 +36,20 @@ from drifttrace.features.transform import (
 from drifttrace.streaming.event import PredictionEvent
 from drifttrace.streaming.source import FileSink
 
-NORMAL = "normal"
-DRIFT = "drift"
+# Scenario names.
+CONTROL = "control"
+INCOME_ANNUAL = "income_annual"
+MID_CHAIN = "mid_chain"
+TWO_ROOTS = "two_roots"
+
+# Backward-compatible aliases (Phase 3 tests/docs used these).
+NORMAL = CONTROL
+DRIFT = INCOME_ANNUAL
+
+SCENARIOS = [CONTROL, INCOME_ANNUAL, MID_CHAIN, TWO_ROOTS]
+
+_CREDIT_MIN = 300.0
+_CREDIT_MAX = 900.0
 
 
 def _base_income(n: int, seed: int) -> np.ndarray:
@@ -36,34 +57,32 @@ def _base_income(n: int, seed: int) -> np.ndarray:
     return rng.lognormal(mean=8.5, sigma=0.5, size=n)
 
 
-def _events_from_income(
+def _events(
     income: np.ndarray,
-    params: TransformParams,
-    source: str,
+    credit: np.ndarray,
+    risk: np.ndarray,
+    scenario: str,
     model_version: str | None,
 ) -> list[PredictionEvent]:
-    credit = compute_credit_score(income, params)
-    risk = compute_risk_score(credit, params)
     prediction = (risk >= 0.5).astype(int)
     events: list[PredictionEvent] = []
     for i in range(len(income)):
         features = {
-            "income": float(round(income[i], 6)),
-            "credit_score": float(round(credit[i], 6)),
-            "risk_score": float(round(risk[i], 6)),
+            "income": float(round(float(income[i]), 6)),
+            "credit_score": float(round(float(credit[i]), 6)),
+            "risk_score": float(round(float(risk[i]), 6)),
         }
-        # Deterministic event id + timestamp so replays are byte-reproducible.
         events.append(
             PredictionEvent(
                 schema_version="1.0",
-                event_id=f"{source}-{i:05d}",
-                request_id=f"{source}-req-{i:05d}",
+                event_id=f"{scenario}-{i:05d}",
+                request_id=f"{scenario}-req-{i:05d}",
                 model_version=model_version,
                 timestamp="2024-01-01T00:00:00+00:00",
                 features={k: features[k] for k in MODEL_FEATURES},
                 prediction=int(prediction[i]),
-                probability=float(round(risk[i], 6)),
-                source=f"replay:{source}",
+                probability=float(round(float(risk[i]), 6)),
+                source=f"replay:{scenario}",
             )
         )
     return events
@@ -75,19 +94,44 @@ def generate_events(
     seed: int = 7,
     model_version: str | None = None,
 ) -> list[PredictionEvent]:
-    """Generate deterministic events for ``scenario`` in {"normal", "drift"}.
-
-    - normal: income drawn from the training-like distribution.
-    - drift:  the same income annualized (x12) - the pitch's monthly->annual failure,
-      used here ONLY to make drift-window events differ from normal ones.
-    """
+    """Generate deterministic events for a scenario. Values only; no verdict is forced."""
     income = _base_income(n, seed)
-    params = fit_params(income)
-    if scenario == DRIFT:
+    params: TransformParams = fit_params(income)
+    rng = np.random.default_rng(seed + 1000)
+
+    if scenario == CONTROL:
+        credit = compute_credit_score(income, params)
+        risk = compute_risk_score(credit, params)
+
+    elif scenario == INCOME_ANNUAL:
+        # Monthly -> annual: income x12. credit/risk derived from the shifted income,
+        # so downstream nodes move as symptoms.
         income = income * 12.0
-    elif scenario != NORMAL:
-        raise ValueError(f"unknown scenario '{scenario}' (expected 'normal' or 'drift')")
-    return _events_from_income(income, params, scenario, model_version)
+        credit = compute_credit_score(income, params)
+        risk = compute_risk_score(credit, params)
+
+    elif scenario == MID_CHAIN:
+        # income stays baseline; credit_score is shifted directly downward, risk derived
+        # from the shifted credit so risk moves as a symptom of credit.
+        credit = compute_credit_score(income, params)
+        credit = np.clip(credit - 150.0, _CREDIT_MIN, _CREDIT_MAX)
+        risk = compute_risk_score(credit, params)
+
+    elif scenario == TWO_ROOTS:
+        # Two independent roots: income shifted (root 1) and risk_score independently
+        # perturbed (root 2), while credit_score is kept near its baseline so it is not
+        # itself a drifted intermediate that would make risk a mere symptom.
+        base_income = income.copy()
+        income = income * 12.0
+        credit = compute_credit_score(base_income, params)  # credit from UNSHIFTED income
+        risk = compute_risk_score(credit, params)
+        # Independently push risk toward 1.0 (an exogenous shock unrelated to credit).
+        risk = np.clip(risk + rng.uniform(0.35, 0.55, size=len(risk)), 0.0, 1.0)
+
+    else:
+        raise ValueError(f"unknown scenario '{scenario}' (expected one of {SCENARIOS})")
+
+    return _events(income, credit, risk, scenario, model_version)
 
 
 def write_events(events: list[PredictionEvent], path: str | Path) -> Path:
@@ -103,8 +147,11 @@ def write_events(events: list[PredictionEvent], path: str | Path) -> Path:
 
 
 def write_demo_datasets(out_dir: str | Path, n: int = 200, seed: int = 7) -> dict[str, Path]:
-    """Write both the normal and simulated-drift event files. Returns their paths."""
+    """Write all four scenario event files. Returns their paths."""
     out = Path(out_dir)
-    normal = write_events(generate_events(NORMAL, n=n, seed=seed), out / "events_normal.jsonl")
-    drift = write_events(generate_events(DRIFT, n=n, seed=seed), out / "events_drift.jsonl")
-    return {"normal": normal, "drift": drift}
+    paths: dict[str, Path] = {}
+    for scenario in SCENARIOS:
+        paths[scenario] = write_events(
+            generate_events(scenario, n=n, seed=seed), out / f"events_{scenario}.jsonl"
+        )
+    return paths

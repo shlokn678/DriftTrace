@@ -32,6 +32,7 @@ def trained_env(tmp_path):
         topic="drifttrace.predictions",
         event_log_path=event_log,
         transform_params_path=tmp_path / "artifacts" / "transform_params.json",
+        reports_dir_path=tmp_path / "reports",
     )
     return settings, event_log
 
@@ -109,3 +110,61 @@ def test_predict_malformed_returns_422(client) -> None:
     resp = c.post("/predict", json={"income": -5.0})
     assert resp.status_code == 422
     assert c.get("/health").status_code == 200
+
+
+# --- Phase 4 endpoints -----------------------------------------------------------------
+@pytest.mark.integration
+def test_metrics_endpoint_prometheus_format(client) -> None:
+    c, _ = client
+    # Make a prediction so a counter increments.
+    c.post("/predict", json={"income": 3000.0, "request_id": "m1"})
+    resp = c.get("/metrics")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "drifttrace_prediction_requests_total" in body
+    assert "# TYPE drifttrace_prediction_requests_total counter" in body
+
+
+@pytest.mark.integration
+def test_rca_latest_not_available_initially(client) -> None:
+    c, _ = client
+    resp = c.get("/rca/latest")
+    assert resp.status_code == 200
+    # No monitoring cycle has written a report in this isolated temp reports dir.
+    assert resp.json()["available"] is False
+
+
+@pytest.mark.integration
+def test_rca_latest_returns_persisted_report(trained_env) -> None:
+    from fastapi.testclient import TestClient
+
+    from drifttrace.serving.app import create_app
+
+    settings, _ = trained_env
+    # Write a latest_rca.json into the configured reports dir.
+    settings.reports_dir_path.mkdir(parents=True, exist_ok=True)
+    (settings.reports_dir_path / "latest_rca.json").write_text(
+        '{"report_id": "rpt-test", "rca": {"has_root_cause": true}}', encoding="utf-8"
+    )
+    with TestClient(create_app(settings)) as c:
+        body = c.get("/rca/latest").json()
+        assert body["available"] is True
+        assert body["report"]["report_id"] == "rpt-test"
+
+
+@pytest.mark.integration
+def test_explain_endpoint_shap(client) -> None:
+    c, _ = client
+    resp = c.post("/explain", json={"income": 4000.0, "method": "shap"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["method"] == "shap"
+    assert body["model_version"] is not None
+    assert len(body["attributions"]) == 3
+
+
+@pytest.mark.integration
+def test_explain_off_hot_path_predict_has_no_attributions(client) -> None:
+    c, _ = client
+    predict = c.post("/predict", json={"income": 4000.0}).json()
+    assert "attributions" not in predict  # /predict never computes explanations

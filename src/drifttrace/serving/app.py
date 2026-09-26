@@ -25,7 +25,9 @@ import pandas as pd
 
 from drifttrace.features.transform import MODEL_FEATURES, TransformParams, transform
 from drifttrace.serving.config import ServingSettings, get_serving_settings
+from drifttrace.serving.metrics import METRICS
 from drifttrace.serving.schemas import (
+    ExplainRequest,
     HealthResponse,
     ModelInfoResponse,
     PredictRequest,
@@ -100,7 +102,8 @@ def predict_one(
     prediction = int(probability >= 0.5)
     features = {name: float(featured[name].iloc[0]) for name in MODEL_FEATURES}
 
-    # Log the request (FR-7.4).
+    # Log the request (FR-7.4) and count it (metrics).
+    METRICS.inc("drifttrace_prediction_requests_total")
     logger.info(
         "prediction request_id=%s model_version=%s prediction=%s probability=%.6f",
         req.request_id,
@@ -124,6 +127,7 @@ def predict_one(
         try:
             sink.emit(event)
             event_emitted = True
+            METRICS.inc("drifttrace_prediction_events_total")
         except Exception as exc:  # noqa: BLE001 - emission must not break serving
             logger.warning("event emission failed: %s", exc)
 
@@ -191,4 +195,70 @@ def create_app(settings: ServingSettings | None = None) -> Any:
             raise HTTPException(status_code=503, detail="model not loaded")
         return predict_one(holder, req, sink)
 
+    @app.get("/rca/latest")
+    def rca_latest() -> dict:
+        """Return the latest persisted monitoring/RCA report (FR-7.5, FR-12.1).
+
+        Reads the ``latest_rca.json`` written by the monitor. Returns a not-available
+        status (never an error) when no monitoring cycle has run yet.
+        """
+        import json
+
+        latest = settings.reports_dir_path / "latest_rca.json"
+        if not latest.exists():
+            return {"available": False, "detail": "no monitoring report yet"}
+        return {"available": True, "report": json.loads(latest.read_text(encoding="utf-8"))}
+
+    @app.post("/explain")
+    def explain(req: ExplainRequest) -> dict:
+        """SHAP (primary) or LIME (secondary) explanation, off the hot path (FR-14)."""
+        if not holder.ready:
+            holder.load()
+        if not holder.ready:
+            raise HTTPException(status_code=503, detail="model not loaded")
+
+        from drifttrace.explain.explainer import lime_explain_local, shap_explain_local
+
+        # A small deterministic background/training sample derived from the transform.
+        bg = _explain_background(holder)
+        try:
+            if req.method == "lime":
+                exp = lime_explain_local(
+                    holder.model,
+                    req.income,
+                    holder.transform_params,
+                    bg,
+                    model_version=holder.model_version,
+                )
+            else:
+                exp = shap_explain_local(
+                    holder.model,
+                    req.income,
+                    holder.transform_params,
+                    model_version=holder.model_version,
+                    background=bg,
+                )
+        except Exception as exc:  # noqa: BLE001 - explainability must not 500 the API
+            raise HTTPException(status_code=500, detail=f"explanation failed: {exc}") from exc
+        return exp.to_dict()
+
+    @app.get("/metrics")
+    def metrics() -> Any:
+        """Prometheus-compatible metrics text (no Prometheus/Grafana installed)."""
+        from fastapi.responses import PlainTextResponse
+
+        return PlainTextResponse(METRICS.to_prometheus())
+
     return app
+
+
+def _explain_background(holder: ModelHolder) -> pd.DataFrame:
+    """Build a small deterministic background sample of model features for explainers."""
+    import numpy as np
+
+    assert holder.transform_params is not None
+    rng = np.random.default_rng(0)
+    incomes = rng.lognormal(mean=8.5, sigma=0.5, size=50)
+    frame = pd.DataFrame({"income": incomes})
+    featured = transform(frame, holder.transform_params)
+    return featured[MODEL_FEATURES]

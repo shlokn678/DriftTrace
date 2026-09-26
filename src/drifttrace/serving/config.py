@@ -35,6 +35,7 @@ class ServingSettings:
     topic: str
     event_log_path: Path
     transform_params_path: Path
+    reports_dir_path: Path
 
     def load_transform_params(self) -> TransformParams:
         """Load transform params persisted by the training pipeline (FR-3.3).
@@ -73,4 +74,5 @@ def get_serving_settings() -> ServingSettings:
                 str(paths.artifacts / "transform_params.json"),
             )
         ),
+        reports_dir_path=Path(os.environ.get("DRIFTTRACE_REPORTS_DIR", str(paths.reports))),
     )

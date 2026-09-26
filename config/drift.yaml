@@ -1,12 +1,15 @@
-# DriftTrace — drift + windowing config (placeholder; finalized in Phase 4, FR-9/FR-13)
+# DriftTrace - drift detection + windowing config (FR-9, FR-13).
 thresholds:
-  ks_pvalue: 0.05          # p < 0.05 -> drift
+  ks_pvalue: 0.05          # KS p-value < 0.05 -> drift
   psi_drift: 0.2           # PSI >= 0.2 -> drift
-  psi_warning: 0.1         # 0.1 <= PSI < 0.2 -> warning
+  psi_warning: 0.1         # 0.1 <= PSI < 0.2 -> warning; < 0.1 -> stable
+detection:
+  min_samples: 30          # per-node window minimum; below -> INSUFFICIENT_DATA (FR-9.5)
+  psi_bins: 10             # number of quantile bins for PSI (continuous nodes)
 window:
   policy: tumbling
   size: 500
-  min_samples: 100         # below -> "insufficient data", no alert
+  min_samples: 100         # window-level minimum (Phase 3 windowing)
 alerting:
-  cooldown_seconds: 900    # suppress repeat alerts for an unchanged open root cause
-per_node: {}               # optional per-node overrides
+  cooldown_seconds: 900    # suppress repeat alerts for an unchanged open root cause (FR-11.4)
+per_node: {}               # optional per-node threshold overrides

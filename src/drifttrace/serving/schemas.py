@@ -23,6 +23,13 @@ class BatchPredictRequest(BaseModel):
     items: list[PredictRequest] = Field(..., min_length=1)
 
 
+class ExplainRequest(BaseModel):
+    """An explanation request (off the prediction hot path, FR-14.4)."""
+
+    income: float = Field(..., ge=0, description="Raw monthly income (>= 0)")
+    method: str = Field("shap", description="'shap' (primary) or 'lime' (secondary)")
+
+
 class PredictResponse(BaseModel):
     """A single prediction response (FR-7 AC-3)."""
 

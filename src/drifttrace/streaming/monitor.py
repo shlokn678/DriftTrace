@@ -46,6 +46,7 @@ class MonitorResult:
     notifications_sent: int = 0
     notifications_failed: int = 0
     window_summaries: list[dict] = field(default_factory=list)
+    outcomes: list[dict] = field(default_factory=list)  # Phase 4 per-window outcomes
 
     def to_dict(self) -> dict:
         return {
@@ -53,11 +54,18 @@ class MonitorResult:
             "notifications_sent": self.notifications_sent,
             "notifications_failed": self.notifications_failed,
             "window_summaries": self.window_summaries,
+            "outcomes": self.outcomes,
         }
 
 
 class Monitor:
-    """Consume events from a source, window them, and notify per closed window."""
+    """Consume events from a source, window them, and process per closed window.
+
+    Two modes:
+    - Phase 4 (preferred): pass a ``processor`` (a Phase4Processor) that runs
+      drift -> RCA -> report -> root-cause alert per window.
+    - Phase 3 (legacy): pass a ``handler`` + ``webhook`` to post window summaries.
+    """
 
     def __init__(
         self,
@@ -65,14 +73,29 @@ class Monitor:
         webhook: WebhookClient | None = None,
         policy: WindowPolicy | None = None,
         handler: WindowHandler | None = None,
+        processor: object | None = None,
     ) -> None:
         self.source = source
         self.webhook = webhook
         self.windower = TumblingWindower(policy)
-        self.handler = handler or default_window_handler
+        self.processor = processor
+        # Only fall back to the Phase 3 summary handler when no processor is given.
+        self.handler = (
+            handler
+            if handler is not None
+            else (None if processor is not None else default_window_handler)
+        )
 
     def _process_window(self, window: Window, result: MonitorResult) -> None:
         result.windows_processed += 1
+        # Phase 4 path: the processor owns drift/RCA/report/alert.
+        if self.processor is not None:
+            outcome = self.processor.process(window)  # type: ignore[attr-defined]
+            result.outcomes.append(outcome.to_dict())
+            return
+        # Phase 3 legacy path.
+        if self.handler is None:
+            return
         payload = self.handler(window)
         if payload is None:
             return
