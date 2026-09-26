@@ -39,9 +39,20 @@ Grafana and AWS SageMaker. **Future:** automatic graph learning, temporal window
 See `.kiro/steering/structure.md`. Directories are scaffolded; implementation begins at
 Phase 0 in `tasks.md`.
 
-## Quickstart (planned)
-Implementation not started. Planned local dev uses a broker-free `core` Docker Compose profile
-plus a pure-Python path for the pipeline and unit tests. Details will land in `docs/runbook.md`.
+## Quickstart (Phase 3 serving + streaming)
+Build the image and start the core profile (trains + serves the model), then predict:
+```
+docker build -f docker/Dockerfile -t drifttrace:latest .
+docker compose -f docker/docker-compose.yml --profile core up -d
+curl http://localhost:8000/health
+curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"income": 4200.0}'
+```
+The `full` profile adds Redpanda + the streaming monitor + webhook stub. See
+`docs/runbook.md` for the complete build / run / demo-replay / verify / logs / stop /
+cleanup commands, including the deterministic normal and simulated-drift replays.
+
+Note: the simulated-drift replay is Phase 3 demo input to exercise the event pipeline;
+actual KS/PSI drift detection and RCA are Phase 4 and are not implemented yet.
 
 ## Notes
 - Not yet connected to GitHub.

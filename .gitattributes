@@ -1,0 +1,6 @@
+# Ensure container/shell files always use LF, even on Windows checkouts, so the
+# Docker image entrypoint runs correctly.
+*.sh text eol=lf
+docker/entrypoint.sh text eol=lf
+Dockerfile text eol=lf
+*.Dockerfile text eol=lf

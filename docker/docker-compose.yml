@@ -1,0 +1,152 @@
+# DriftTrace Docker Compose (FR-7, FR-11.5, FR-13; design §11).
+# Profiles:
+#   core    : api + mlflow + webhook-stub      (lightweight, deterministic)
+#   full    : core + redpanda + monitor         (streaming end-to-end)
+#   stretch : reserved for Prometheus/Grafana   (Phase 4 / stretch; not built here)
+#
+# Container-to-container communication uses service DNS names (mlflow, redpanda,
+# webhook-stub), never localhost. No credentials are required (NFR-7).
+
+name: drifttrace
+
+services:
+  # ---- One-shot initializer: train the model INTO the shared model-store volume -----
+  # Runs the existing Phase 1 pipeline (train -> register -> baseline + transform
+  # params) inside the container layout so all MLflow artifact paths are Linux-native
+  # and deterministic. Uses the existing model/lifecycle; invents no second model.
+  init:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: drifttrace:latest
+    profiles: ["core", "full"]
+    # Idempotent: build the dataset then train/register into the shared store. If a
+    # model is already registered, re-running simply adds another version (harmless).
+    entrypoint: ["/bin/bash", "-lc"]
+    command:
+      - >
+        mkdir -p /store/config &&
+        cp -n /app/config/*.yaml /store/config/ &&
+        python -m drifttrace.cli.main build-dataset --n-rows 5000 --seed 42 &&
+        python -m drifttrace.cli.main run-pipeline --seed 42 --min-roc-auc 0.6
+    environment:
+      DRIFTTRACE_ROOT: "/store"
+      MLFLOW_TRACKING_URI: "sqlite:////store/mlflow.db"
+    volumes:
+      - model-store:/store
+
+  # ---- MLflow tracking + registry UI (reads the shared model-store) ----------------
+  mlflow:
+    # Must match the client MLflow version used to create the SQLite store (3.16.1),
+    # otherwise the UI server's DB migration fails on an unknown schema revision.
+    image: ghcr.io/mlflow/mlflow:v3.16.1
+    profiles: ["core", "full"]
+    command: >
+      mlflow server
+      --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////store/mlflow.db
+      --default-artifact-root /store/mlartifacts
+    volumes:
+      - model-store:/store
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+  # ---- FastAPI prediction service --------------------------------------------------
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: drifttrace:latest
+    profiles: ["core", "full"]
+    command: ["api"]
+    environment:
+      # Load the model directly from the shared SQLite store (container-native paths).
+      DRIFTTRACE_ROOT: "/store"
+      MLFLOW_TRACKING_URI: "sqlite:////store/mlflow.db"
+      DRIFTTRACE_API_PORT: "8000"
+      # Emit prediction events to Redpanda when running the full profile; the core
+      # profile leaves this false and the API writes events to a local file instead.
+      DRIFTTRACE_USE_REDPANDA: "${DRIFTTRACE_USE_REDPANDA:-false}"
+      REDPANDA_BROKER: "redpanda:9092"
+      DRIFTTRACE_TOPIC: "drifttrace.predictions"
+      DRIFTTRACE_EVENT_LOG: "/store/reports/events.jsonl"
+      DRIFTTRACE_TRANSFORM_PARAMS: "/store/artifacts/transform_params.json"
+    volumes:
+      - model-store:/store
+    ports:
+      - "${DRIFTTRACE_API_PORT:-8000}:8000"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # ---- Local webhook stub receiver -------------------------------------------------
+  webhook-stub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: drifttrace:latest
+    profiles: ["core", "full"]
+    command: ["webhook"]
+    environment:
+      DRIFTTRACE_WEBHOOK_PORT: "9000"
+    ports:
+      - "${WEBHOOK_STUB_PORT:-9000}:9000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ---- Redpanda (Kafka-API broker) -------------------------------------------------
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    profiles: ["full"]
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+      - --check=false
+    ports:
+      - "${REDPANDA_PORT:-9092}:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  # ---- Streaming monitor (consumes Redpanda -> windows -> webhook stub) ------------
+  monitor:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: drifttrace:latest
+    profiles: ["full"]
+    command: ["monitor", "--window-size", "50", "--min-samples", "10"]
+    environment:
+      REDPANDA_BROKER: "redpanda:9092"
+      DRIFTTRACE_TOPIC: "drifttrace.predictions"
+      WEBHOOK_STUB_URL: "http://webhook-stub:9000/alert"
+    depends_on:
+      redpanda:
+        condition: service_started
+      webhook-stub:
+        condition: service_started
+    restart: on-failure
+
+volumes:
+  model-store:

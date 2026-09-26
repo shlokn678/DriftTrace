@@ -73,11 +73,27 @@ def run_training_pipeline(
 
     # Build and persist the versioned drift baseline for this model version (FR-9.3).
     graph = load_graph()
-    featured = transform(frame, fit_params(frame["income"].to_numpy(dtype=float)))
+    tparams = fit_params(frame["income"].to_numpy(dtype=float))
+    featured = transform(frame, tparams)
     baseline = build_baseline(
         featured, graph, model_version=(logged.model_version or "unregistered")
     )
     baseline.save(art_dir / "baseline.json")
+
+    # Persist the feature-transform params so the serving layer applies the exact same
+    # transform as training (FR-3.3). Small, additive artifact; does not change training.
+    (art_dir / "transform_params.json").write_text(
+        json.dumps(
+            {
+                "income_ref_log_mean": tparams.income_ref_log_mean,
+                "income_ref_log_std": tparams.income_ref_log_std,
+                "credit_coef": tparams.credit_coef,
+                "risk_credit_coef": tparams.risk_credit_coef,
+            },
+            indent=2,
+        ),
+        "utf-8",
+    )
 
     manifest = PipelineResult(
         run_id=logged.run_id,

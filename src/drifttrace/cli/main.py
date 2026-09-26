@@ -11,8 +11,12 @@ broker. Commands:
 - ``report``         DAG stage: write the pipeline report (always runs)
 - ``retrain``        DAG stage: retrain, gated by explicit --approve (FR-6.2/FR-12.2)
 - ``run-dag``        run the whole ingest->validate->drift-check->report[/retrain] locally
+- ``serve``          run the FastAPI prediction service (uvicorn)
+- ``webhook-stub``   run the local webhook stub receiver (uvicorn)
+- ``demo-generate``  write deterministic normal + simulated-drift event files
+- ``replay``         replay a JSON-lines event file through the monitor -> webhook
 
-Later phases add ``serve``, ``monitor``, ``rca show``, ``rollback``, ``inject``.
+Later phases add ``rca show``, ``rollback``, ``explain``.
 """
 
 from __future__ import annotations
@@ -139,6 +143,75 @@ def _default_dataset() -> Path:
     return get_paths().data / "dataset.csv"
 
 
+# ---- Phase 3 serving / streaming commands ---------------------------------------------
+def _cmd_serve(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    uvicorn.run(
+        "drifttrace.serving.app:create_app",
+        host=args.host,
+        port=args.port,
+        factory=True,
+    )
+    return 0
+
+
+def _cmd_webhook_stub(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    uvicorn.run(
+        "drifttrace.alerting.webhook_stub:create_app",
+        host=args.host,
+        port=args.port,
+        factory=True,
+    )
+    return 0
+
+
+def _cmd_demo_generate(args: argparse.Namespace) -> int:
+    from drifttrace.config import get_paths
+    from drifttrace.streaming.demo import write_demo_datasets
+
+    out_dir = Path(args.out) if args.out else (get_paths().reports / "demo")
+    paths = write_demo_datasets(out_dir, n=args.n, seed=args.seed)
+    _emit({"stage": "demo-generate", "files": {k: str(v) for k, v in paths.items()}})
+    return 0
+
+
+def _cmd_replay(args: argparse.Namespace) -> int:
+    from drifttrace.alerting.webhook import WebhookClient
+    from drifttrace.streaming.monitor import Monitor
+    from drifttrace.streaming.source import FileReplaySource
+    from drifttrace.streaming.window import WindowPolicy
+
+    source = FileReplaySource(args.file)
+    webhook = WebhookClient(args.webhook_url) if args.webhook_url else None
+    policy = WindowPolicy(size=args.window_size, min_samples=args.min_samples)
+    monitor = Monitor(source=source, webhook=webhook, policy=policy)
+    result = monitor.run()
+    _emit({"stage": "replay", "file": args.file, **result.to_dict()})
+    return 0
+
+
+def _cmd_monitor(args: argparse.Namespace) -> int:
+    """Run the monitor against Redpanda (bounded poll) or a file source."""
+    from drifttrace.alerting.webhook import WebhookClient
+    from drifttrace.streaming.monitor import Monitor
+    from drifttrace.streaming.source import FileReplaySource, RedpandaSource
+    from drifttrace.streaming.window import WindowPolicy
+
+    if args.file:
+        source: object = FileReplaySource(args.file)
+    else:
+        source = RedpandaSource(brokers=args.brokers, topic=args.topic)
+    webhook = WebhookClient(args.webhook_url) if args.webhook_url else None
+    policy = WindowPolicy(size=args.window_size, min_samples=args.min_samples)
+    monitor = Monitor(source=source, webhook=webhook, policy=policy)  # type: ignore[arg-type]
+    result = monitor.run(limit=args.limit)
+    _emit({"stage": "monitor", **result.to_dict()})
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="drifttrace", description="DriftTrace CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -184,6 +257,39 @@ def build_parser() -> argparse.ArgumentParser:
     p_dag.add_argument("--approve", action="store_true")
     p_dag.add_argument("--approver", default=None)
     p_dag.set_defaults(func=_cmd_run_dag)
+
+    p_serve = sub.add_parser("serve", help="run the FastAPI prediction service")
+    p_serve.add_argument("--host", default="0.0.0.0")  # noqa: S104 - internal container bind
+    p_serve.add_argument("--port", type=int, default=8000)
+    p_serve.set_defaults(func=_cmd_serve)
+
+    p_ws = sub.add_parser("webhook-stub", help="run the local webhook stub receiver")
+    p_ws.add_argument("--host", default="0.0.0.0")  # noqa: S104 - internal container bind
+    p_ws.add_argument("--port", type=int, default=9000)
+    p_ws.set_defaults(func=_cmd_webhook_stub)
+
+    p_demo = sub.add_parser("demo-generate", help="write deterministic normal + drift events")
+    p_demo.add_argument("--out", default=None, help="output dir (default reports/demo)")
+    p_demo.add_argument("--n", type=int, default=200)
+    p_demo.add_argument("--seed", type=int, default=7)
+    p_demo.set_defaults(func=_cmd_demo_generate)
+
+    p_replay = sub.add_parser("replay", help="replay an event file through the monitor")
+    p_replay.add_argument("--file", required=True, help="JSON-lines event file")
+    p_replay.add_argument("--webhook-url", default=None, help="webhook stub /alert URL")
+    p_replay.add_argument("--window-size", type=int, default=100)
+    p_replay.add_argument("--min-samples", type=int, default=50)
+    p_replay.set_defaults(func=_cmd_replay)
+
+    p_mon = sub.add_parser("monitor", help="run the monitor (Redpanda or file source)")
+    p_mon.add_argument("--brokers", default="localhost:9092")
+    p_mon.add_argument("--topic", default="drifttrace.predictions")
+    p_mon.add_argument("--file", default=None, help="use a file source instead of Redpanda")
+    p_mon.add_argument("--webhook-url", default=None)
+    p_mon.add_argument("--window-size", type=int, default=100)
+    p_mon.add_argument("--min-samples", type=int, default=50)
+    p_mon.add_argument("--limit", type=int, default=None)
+    p_mon.set_defaults(func=_cmd_monitor)
 
     return parser
 

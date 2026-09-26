@@ -29,14 +29,15 @@ Legend: `[ ]` not started · MVP unless marked `[STRETCH]`/`[FUTURE]`.
 - [x] 2.3 GitHub Actions: lint, format, type, unit, schema tests. _(FR-16.1/16.4)_ — `.github/workflows/ci.yml` (Python 3.11 + 3.13).
 - [x] 2.4 CI runs broker-free / Airflow-free / credential-free. _(FR-16.2)_ — installs only `.[dev,tracking]`; no broker/Airflow/Docker/secrets (D-37).
 
-## Phase 3 — Deploy (API + Docker + streaming) `[PITCH Phase 3: FastAPI + Docker + Kafka]`
-- [ ] 3.1 FastAPI service: `/health`, `/ready`, `/predict`, `/model-info`; load model by version; request logging. _(FR-7)_
-- [ ] 3.2 Dockerfile + Compose profiles (`core`, `full`). _(NFR-3/4, design §11)_
-- [ ] 3.3 Event source interface: file-replay + Redpanda consumer. _(FR-13.6)_
-- [ ] 3.4 Windowing + async streaming monitor process. _(FR-13.1/13.2/13.3)_
-- [ ] 3.5 Prediction event emission from API (fire-and-forget). _(FR-7.2, NFR-2)_
-- [ ] 3.6 Redpanda + monitor + webhook-stub services in Compose. _(FR-11.5, design §11)_
-- [ ] 3.7 CI image build + Compose smoke test (`/health` + one `/predict`). _(FR-16.3, AC-10)_
+## Phase 3 — Deploy (API + Docker + streaming) `[PITCH Phase 3: FastAPI + Docker + Kafka]` — DONE
+- [x] 3.1 FastAPI service: `/health`, `/ready`, `/predict`, `/model-info`; load model by version; request logging. _(FR-7)_ — `serving/app.py`; loads registered model via MLflow registry; logs each request.
+- [x] 3.2 Dockerfile + Compose profiles (`core`, `full`). _(NFR-3/4, design §11)_ — single image, entrypoint roles api/webhook/monitor/cli; profiles core/full (+stretch reserved). Built and run on Docker 29.8.0.
+- [x] 3.3 Event source interface: file-replay + Redpanda consumer. _(FR-13.6)_ — `streaming/source.py`; core stays broker-free (confluent-kafka lazy import).
+- [x] 3.4 Windowing + async streaming monitor process. _(FR-13.1/13.2/13.3)_ — `streaming/window.py` + `streaming/monitor.py`; tumbling windows; NO drift algorithms (Phase 4).
+- [x] 3.5 Prediction event emission from API (fire-and-forget). _(FR-7.2, NFR-2)_ — `PredictionEvent` emitted to file (core) or Redpanda (full); failures never break serving.
+- [x] 3.6 Redpanda + monitor + webhook-stub services in Compose. _(FR-11.5, design §11)_ — verified e2e: predict -> Redpanda -> monitor -> webhook stub (count observed).
+- [x] 3.7 CI image build + Compose smoke test (`/health` + one `/predict`). _(FR-16.3, AC-10)_ — `.github/workflows/ci.yml` `docker` job; smoke path verified locally.
+- Deterministic demo/replay (REQUIRED): `streaming/demo.py` + `replay` CLI; normal + simulated-drift event files carried through source -> monitor/window -> webhook. Simulated drift is demo input only; NOT drift detection (Phase 4).
 
 ## Phase 4 — Operate (Drift + RCA + Alerts) `[PITCH Phase 4: Prometheus/Grafana + RCA]`
 - [ ] 4.1 Per-node drift detection (KS + PSI, verdicts). _(FR-9)_

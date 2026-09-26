@@ -33,12 +33,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install package with dev + tracking extras
-        # Core + dev tooling + MLflow (for the registry integration tests). No broker,
-        # no Airflow, no cloud dependencies are installed.
+      - name: Install package with dev + tracking + serving + streaming extras
+        # Core + dev tooling + MLflow + FastAPI/httpx (serving tests) + confluent-kafka
+        # (streaming adapter import tests). No Airflow, no running broker, no cloud
+        # dependencies. The tests never connect to a real broker (FR-16.2, NFR-8).
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,tracking]"
+          python -m pip install -e ".[dev,tracking,serving,streaming]"
 
       - name: Lint (ruff)
         run: python -m ruff check src tests
@@ -60,3 +61,48 @@ jobs:
         # Run the schema/validation tests on their own so a schema regression is a
         # clearly named CI failure, as required by FR-2.1 / FR-16.1.
         run: python -m pytest tests/unit/test_schema_validate.py -q
+
+  docker:
+    name: Docker build + Compose validation + smoke test
+    runs-on: ubuntu-latest
+    # Credential-free: no registry login, no secrets, no cloud. The image is built
+    # and exercised locally on the runner only (FR-16.3, NFR-7).
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the project image
+        run: docker build -f docker/Dockerfile -t drifttrace:ci .
+
+      - name: Validate Compose configuration (core + full)
+        run: |
+          docker compose -f docker/docker-compose.yml --profile core config --quiet
+          docker compose -f docker/docker-compose.yml --profile full config --quiet
+
+      - name: Compose smoke test (core profile)
+        # Bring up the core profile (init trains the model into a shared volume, then
+        # api + webhook-stub start). Verify the API health/readiness and one prediction,
+        # and confirm the prediction emitted an event. Broker-free.
+        run: |
+          set -euo pipefail
+          docker tag drifttrace:ci drifttrace:latest
+          docker compose -f docker/docker-compose.yml --profile core up -d --wait --wait-timeout 240
+          echo "== health =="
+          curl -fsS http://localhost:8000/health
+          echo "== ready =="
+          curl -fsS http://localhost:8000/ready
+          echo "== predict =="
+          curl -fsS -X POST http://localhost:8000/predict \
+            -H "Content-Type: application/json" \
+            -d '{"income": 4200.0, "request_id": "ci-1"}' | tee /tmp/predict.json
+          grep -q '"event_emitted":true' /tmp/predict.json
+          echo "== webhook stub health =="
+          curl -fsS http://localhost:9000/health
+
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.yml --profile core logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker/docker-compose.yml --profile core --profile full down -v
