@@ -1,87 +1,144 @@
 # DriftTrace
 
 **An End-to-End MLOps System for Automated Root-Cause Analysis of ML Drift**
-Course CI3203D · Computer Science & Engineering (Artificial Intelligence)
-
-> Status: **planning / specification stage.** No application code has been implemented yet.
-> The specification is the source of truth and lives in `.kiro/specs/drifttrace/`.
 
 ## What it does
-A model can be accurate in training and still fail in production. DriftTrace turns a wall of
-independent drift alarms into one actionable diagnosis:
 
-1. Detect drift per node using KS-test / PSI.
-2. Read the declared dependency graph and trace upstream.
-3. Flag the earliest drifted node; log and alert only on the root-cause candidate.
-4. Let operators inspect the evidence and decide whether to fix data, roll back, or retrain.
+DriftTrace watches a machine-learning pipeline in production and finds *why* it starts
+to fail, not just *that* it failed. It:
 
-Application: a loan-default / churn pipeline with chained features
-`income -> credit_score -> risk_score -> prediction API`.
+- monitors an ML pipeline for data drift
+- compares production data against the training baseline
+- detects drift per feature using the **KS-test** and **PSI**
+- reads a declared **dependency graph** (via **NetworkX**) and traces drift upstream
+- identifies the **root cause** and marks downstream nodes as **symptoms**
+- produces root-cause alerts and monitoring reports
+- provides **SHAP / LIME** explanations for predictions
+- supports **operator-approved** rollback and retraining (never automatic)
 
-## MVP stack
-FastAPI + Docker Compose + MLflow + GitHub Actions, with Git + DVC, Apache Airflow, NetworkX,
-scikit-learn, SciPy, SHAP/LIME, and a Kafka-API broker (Redpanda). **Stretch:** Prometheus /
-Grafana and AWS SageMaker. **Future:** automatic graph learning, temporal windows + GNNs.
+Instead of firing a separate alarm for every drifted feature, DriftTrace turns a wall of
+alerts into one actionable diagnosis.
 
-## Specification (start here)
-- `.kiro/specs/drifttrace/requirements.md` — functional / non-functional / system requirements + acceptance criteria
-- `.kiro/specs/drifttrace/design.md` — architecture, component responsibilities, data & lifecycle flows
-- `.kiro/specs/drifttrace/tasks.md` — phased implementation plan, testing, Docker, CI/CD, docs plans
-- `.kiro/specs/drifttrace/syllabus-mapping.md` — CI3203D Units I-VI mapping
-- `.kiro/specs/drifttrace/assumptions-and-decisions.md` — every implementation decision + open questions
+## Demo pipeline
 
-## Docs
-- `docs/architecture.md` — architecture reference (mirrors the spec)
-- `docs/runbook.md` — how to run the demo (to be filled during implementation)
-- `docs/governance-checklist.md` — responsible-AI evidence checklist
-
-## Repository layout
-See `.kiro/steering/structure.md`. Directories are scaffolded; implementation begins at
-Phase 0 in `tasks.md`.
-
-## Quickstart (Phase 3 serving + streaming)
-Build the image and start the core profile (trains + serves the model), then predict:
 ```
-docker build -f docker/Dockerfile -t drifttrace:latest .
-docker compose -f docker/docker-compose.yml --profile core up -d
-curl http://localhost:8000/health
-curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"income": 4200.0}'
+income
+   ↓
+credit_score
+   ↓
+risk_score
+   ↓
+ML model
+   ↓
+default / not default
 ```
-The `full` profile adds Redpanda + the streaming monitor + webhook stub. See
-`docs/runbook.md` for the complete build / run / demo-replay / verify / logs / stop /
-cleanup commands, including the deterministic normal and simulated-drift replays.
 
-## Phase 4 — Drift detection, RCA, alerting (Operate)
-Phase 4 adds the real intelligence: per-node KS + PSI drift detection, graph-based
-root-cause analysis, root-cause-only alerting with cool-down, monitoring reports
-(JSON + Markdown), SHAP/LIME explainability, fairness/privacy governance, operator
-rollback/retrain with an audit trail, and a Prometheus-compatible `/metrics` endpoint.
-The main demo (monthly->annual income) yields `income` as the root cause with
-`credit_score`/`risk_score` as downstream symptoms and exactly one alert. See
-`docs/runbook.md` (Phase 4 section) for exact commands.
+## Main technologies
 
-Prometheus and Grafana are deferred as stretch work; only the `/metrics` interface is
-provided in this phase.
+- Python
+- scikit-learn
+- FastAPI
+- Docker / Docker Compose
+- MLflow
+- DVC
+- Apache Airflow
+- NetworkX
+- SciPy
+- SHAP / LIME
+- Redpanda
+- React + TypeScript + Vite
 
-## Operations Dashboard (frontend)
-A React + TypeScript + Vite dashboard in `frontend/` provides a presentation-ready
-operations view on top of the real Phase 4 backend (health/readiness, model info, the
-dependency graph with root-cause/symptom highlighting, KS/PSI diagnostics, the latest
-incident, SHAP/LIME explanations, operator controls, and `/metrics`). It consumes real
-backend outputs only. Quickstart:
+## Project structure
+
 ```
-# 1. ensure a model exists and start the API
-.\.venv\Scripts\python.exe -m drifttrace.cli.main run-pipeline --seed 42 --min-roc-auc 0.6
-.\.venv\Scripts\python.exe -m uvicorn drifttrace.serving.app:create_app --factory --port 8000
-# 2. run the dashboard
-cd frontend && npm install && npm run dev   # http://localhost:5173
+src/         core Python library (data, features, drift, rca, serving, streaming, ...)
+frontend/    React + TypeScript dashboard
+tests/       unit / integration / e2e tests
+config/      declared config (dependency graph, schema, drift, governance)
+docker/      Dockerfile + docker-compose
+pipelines/   Airflow DAG
+docs/        architecture and runbook
+scripts/     helper scripts
+data/        generated dataset (runtime)
+artifacts/   model baseline and run artifacts (runtime)
+reports/     monitoring reports and alerts (runtime)
 ```
-See `frontend/README.md` for details. Two demo endpoints were added to the serving app
-(`POST /demo/run-scenario`, `GET /demo/scenarios`) that run the existing real KS/PSI +
-graph RCA pipeline so the dashboard's "Run Normal / Simulate Income Drift" buttons drive
-genuine backend analysis.
 
-## Notes
-- Not yet connected to GitHub.
-- No cloud accounts, credentials, external datasets, or paid APIs are required or configured.
-- The MVP prediction API is unauthenticated and intended for localhost / internal use only.
+- **src/** holds the real logic: drift detection, root-cause analysis, and the FastAPI service.
+- **frontend/** is the monitoring dashboard.
+- **config/** defines the dependency graph and thresholds.
+- **docker/** runs the whole stack locally.
+
+## Setup
+
+**Requirements:** Python, Node.js / npm, Docker Desktop.
+
+Clone:
+
+```
+git clone https://github.com/shlokn678/DriftTrace.git
+cd DriftTrace
+```
+
+Start the backend stack:
+
+```
+$env:DRIFTTRACE_USE_REDPANDA = "true"
+docker compose -f docker/docker-compose.yml --profile full up -d
+```
+
+Check the containers:
+
+```
+docker ps --filter "name=drifttrace" --format "{{.Names}} | {{.Status}}"
+```
+
+- API: http://localhost:8000
+- Health: http://localhost:8000/health
+
+Start the frontend in a second terminal:
+
+```
+cd frontend
+npm install
+npm run dev
+```
+
+- Dashboard: http://localhost:5173
+
+## Main demo
+
+The main scenario simulates an income distribution change (monthly income read as
+annual). All three chained features drift, but DriftTrace follows the dependency graph
+and reports:
+
+- **income → ROOT CAUSE**
+- **credit_score → SYMPTOM**
+- **risk_score → SYMPTOM**
+
+Rather than treating the three as separate alerts, it traces the drift upstream and
+identifies `income` as the single root cause, with the others as downstream symptoms.
+
+## Current implementation
+
+- [x] Data generation and validation
+- [x] DVC data versioning
+- [x] Model training and evaluation
+- [x] MLflow tracking and model registry
+- [x] Airflow orchestration
+- [x] FastAPI model serving
+- [x] Docker / Docker Compose deployment
+- [x] Prediction event streaming
+- [x] KS/PSI drift detection
+- [x] NetworkX root-cause analysis
+- [x] Root-cause alerting
+- [x] SHAP/LIME explanations
+- [x] Fairness and privacy checks
+- [x] React monitoring dashboard
+
+## Current scope
+
+- The current demo uses a **synthetic loan-default dataset**.
+- The current MVP uses a **scikit-learn classifier**.
+- The current dependency graph is `income → credit_score → risk_score → prediction`.
+- **Prometheus/Grafana** and **AWS SageMaker** are **not** part of the implemented MVP.
