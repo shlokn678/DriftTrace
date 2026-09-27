@@ -1,4 +1,1 @@
-[core]
-    remote = localremote
-['remote "localremote"']
-    url = C:\Users\shlok\OneDrive\Documents\College (sem 5)\MLOps\CP\.dvc-storage
+
