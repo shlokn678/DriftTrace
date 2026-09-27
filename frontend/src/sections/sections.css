@@ -48,8 +48,10 @@
 }
 .op-cmd {
   display: block;
-  background: var(--navy);
-  color: #e8f0f8;
+  background: #161618;
+  color: #f4f4f5;
+  border: 1px solid var(--border-strong);
+  font-family: var(--font-code);
   padding: 10px 14px;
   border-radius: var(--radius-sm);
   font-size: 0.82rem;

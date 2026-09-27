@@ -1,5 +1,6 @@
-import { Activity, RefreshCw } from "lucide-react";
+import { Activity, Moon, RefreshCw, Sun } from "lucide-react";
 import { MonoLabel, Pill } from "./primitives";
+import type { Theme } from "../lib/theme";
 import "./Header.css";
 
 interface HeaderProps {
@@ -8,6 +9,8 @@ interface HeaderProps {
   modelVersion: string | null;
   onRefresh: () => void;
   refreshing: boolean;
+  theme: Theme;
+  onToggleTheme: () => void;
 }
 
 export function Header({
@@ -16,10 +19,13 @@ export function Header({
   modelVersion,
   onRefresh,
   refreshing,
+  theme,
+  onToggleTheme,
 }: HeaderProps) {
   const statusVariant = healthy === false ? "drift" : healthy === null ? "insufficient" : "stable";
   const statusText =
     healthy === false ? "API down" : healthy === null ? "Checking" : ready ? "Operational" : "Not ready";
+  const nextTheme = theme === "light" ? "dark" : "light";
 
   return (
     <header className="header">
@@ -47,7 +53,19 @@ export function Header({
           </Pill>
           <Pill variant="accent">MODEL v{modelVersion ?? "-"}</Pill>
           <button
-            className="header__refresh"
+            className="header__icon-btn"
+            onClick={onToggleTheme}
+            aria-label={`Switch to ${nextTheme} mode`}
+            title={`Switch to ${nextTheme} mode`}
+          >
+            {theme === "light" ? (
+              <Moon size={16} aria-hidden />
+            ) : (
+              <Sun size={16} aria-hidden />
+            )}
+          </button>
+          <button
+            className="header__icon-btn"
             onClick={onRefresh}
             disabled={refreshing}
             aria-label="Refresh dashboard data"

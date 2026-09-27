@@ -130,7 +130,7 @@ export function OperatorActions({ onScenarioComplete, onViewRca, onExplain }: Pr
               explicit operator approval and is recorded in the audit trail. Execute it via
               the approved backend command:
             </p>
-            <code className="op-cmd mono-value">
+            <code className="op-cmd">
               {pendingAction === "retrain"
                 ? "drifttrace retrain --approve --approver <you>"
                 : "drifttrace rollback --to-version <v> --approve --approver <you>"}

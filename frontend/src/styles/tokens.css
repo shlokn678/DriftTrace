@@ -1,44 +1,98 @@
-/* DriftTrace design tokens - CoWork-inspired visual language.
-   Restrained, editorial, premium. Blue used sparingly. */
-:root {
-  /* Color */
-  --bg: #f7f7f7;
+/* DriftTrace design tokens - monochrome (black & white) visual system.
+   Light is the default theme; [data-theme="dark"] overrides the same token names.
+   Components should reference these tokens only, never hard-coded colors.
+
+   Note: token names such as --navy and --accent are kept for backwards
+   compatibility with existing components, but their VALUES are now monochrome
+   (no blue/navy). --accent is black in light mode and white in dark mode. */
+:root,
+:root[data-theme="light"] {
+  /* Color - light theme (default) */
+  --bg: #f5f5f5;
   --surface: #ffffff;
-  --text: #121212;
-  --navy: #0a1929;
+  --text: #0a0a0a;
+  --navy: #0a0a0a; /* headings / strong text -> near-black */
   --text-secondary: #4a4a4a;
   --text-tertiary: #8b8b8b;
-  --accent: #174a8b;
-  --accent-hover: #0d3a6f;
-  --accent-surface: #e8f0f8;
-  --border: #e5e5e5;
+  --accent: #0a0a0a; /* accent is black, not blue */
+  --accent-hover: #333333;
+  --accent-surface: #efefef;
+  --accent-contrast: #ffffff; /* text/icon color on top of --accent */
+  --border: #e2e2e2;
+  --border-strong: #cfcfcf;
+  --header-bg: rgba(245, 245, 245, 0.82); /* translucent sticky header */
 
-  /* Status (used sparingly, consistently) */
-  --status-stable: #2f855a;
-  --status-stable-surface: #e6f4ec;
-  --status-warning: #b7791f;
-  --status-warning-surface: #fbf3e2;
-  --status-drift: #c05621;
-  --status-drift-surface: #fbece2;
-  --status-root: #9b2c2c;
-  --status-root-surface: #fbe9e9;
-  --status-insufficient: #8b8b8b;
-  --status-insufficient-surface: #f0f0f0;
+  /* Status - grayscale tonal system. Meaning is conveyed by tone + contrast,
+     not hue. ROOT_CAUSE is the strongest (near-black); STABLE the quietest. */
+  --status-stable: #6b6b6b;
+  --status-stable-surface: #f2f2f2;
+  --status-warning: #3a3a3a;
+  --status-warning-surface: #ededed;
+  --status-drift: #262626;
+  --status-drift-surface: #e7e7e7;
+  --status-root: #0a0a0a;
+  --status-root-surface: #e2e2e2;
+  --status-insufficient: #9a9a9a;
+  --status-insufficient-surface: #f2f2f2;
 
-  /* Typography */
-  --font-body: "Inter", system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+  /* Shadows - very restrained, neutral */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.06);
+  --shadow-hover: 0 10px 34px rgba(0, 0, 0, 0.1);
+  --shadow-root: 0 8px 26px rgba(0, 0, 0, 0.14);
+  --shadow-active: 0 6px 16px rgba(0, 0, 0, 0.22);
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  /* Color - dark theme (intentionally tokenized, not a raw inversion) */
+  --bg: #0b0b0c;
+  --surface: #161618;
+  --text: #f4f4f5;
+  --navy: #f4f4f5; /* strong text -> near-white */
+  --text-secondary: #b3b3b6;
+  --text-tertiary: #85858a;
+  --accent: #f4f4f5; /* accent is white in dark mode */
+  --accent-hover: #d4d4d6;
+  --accent-surface: #26262a;
+  --accent-contrast: #0b0b0c; /* text/icon on top of --accent (white) */
+  --border: #2a2a2e;
+  --border-strong: #3d3d42;
+  --header-bg: rgba(11, 11, 12, 0.82);
+
+  --status-stable: #9a9a9f;
+  --status-stable-surface: #1e1e21;
+  --status-warning: #c9c9ce;
+  --status-warning-surface: #232327;
+  --status-drift: #e4e4e7;
+  --status-drift-surface: #2a2a2e;
+  --status-root: #ffffff;
+  --status-root-surface: #303036;
+  --status-insufficient: #77777c;
+  --status-insufficient-surface: #1c1c1f;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.45);
+  --shadow-hover: 0 10px 34px rgba(0, 0, 0, 0.6);
+  --shadow-root: 0 8px 26px rgba(0, 0, 0, 0.6);
+  --shadow-active: 0 6px 16px rgba(0, 0, 0, 0.7);
+
+  color-scheme: dark;
+}
+
+:root {
+  /* Typography - Montserrat everywhere. A monospace stack is kept only for
+     genuinely code-like elements (e.g. the CLI command block). */
+  --font-body: "Montserrat", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Montserrat", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-code: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
 
   /* Geometry */
   --radius-card: 24px;
   --radius-major: 40px;
   --radius-pill: 999px;
   --radius-sm: 12px;
-
-  /* Shadows - very restrained */
-  --shadow-sm: 0 1px 2px rgba(10, 25, 41, 0.04);
-  --shadow-card: 0 4px 20px rgba(10, 25, 41, 0.05);
-  --shadow-hover: 0 10px 34px rgba(10, 25, 41, 0.09);
 
   /* Spacing scale */
   --space-1: 4px;
@@ -76,6 +130,7 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 
 /* Focus visibility for keyboard users */

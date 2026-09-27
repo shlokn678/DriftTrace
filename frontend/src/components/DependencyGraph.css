@@ -54,7 +54,7 @@
   padding: 2px 7px;
   border-radius: var(--radius-pill);
   background: var(--status-root);
-  color: #fff;
+  color: var(--surface);
 }
 
 .depgraph__edge {
@@ -79,7 +79,7 @@
 .depnode--root {
   border: 2px solid var(--status-root);
   background: var(--status-root-surface);
-  box-shadow: 0 8px 26px rgba(155, 44, 44, 0.16);
+  box-shadow: var(--shadow-root);
 }
 .depnode--root .depnode__name { color: var(--status-root); }
 .depnode--root .depnode__status { color: var(--status-root); }

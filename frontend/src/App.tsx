@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { api } from "./api/client";
 import { useAsync } from "./hooks/useAsync";
+import { useTheme } from "./lib/theme";
 import { deriveBundle } from "./lib/derive";
 import { Header } from "./components/Header";
 import { Hero } from "./components/Hero";
@@ -16,6 +17,7 @@ import "./sections/sections.css";
 export default function App() {
   const [nonce, setNonce] = useState(0);
   const bump = useCallback(() => setNonce((n) => n + 1), []);
+  const { theme, toggle: toggleTheme } = useTheme();
 
   const health = useAsync(() => api.health(), [nonce], { pollMs: 15000 });
   const ready = useAsync(() => api.ready(), [nonce], { pollMs: 15000 });
@@ -44,6 +46,8 @@ export default function App() {
         modelVersion={bundle.modelVersion}
         onRefresh={bump}
         refreshing={refreshing}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
 
       <main className="container" style={{ paddingBottom: "var(--space-8)" }}>

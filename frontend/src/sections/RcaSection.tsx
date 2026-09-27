@@ -134,7 +134,7 @@ const rootChip: React.CSSProperties = {
   padding: "6px 14px",
   borderRadius: "var(--radius-pill)",
   background: "var(--status-root)",
-  color: "#fff",
+  color: "var(--surface)",
   fontWeight: 700,
   fontSize: "0.95rem",
 };

@@ -47,8 +47,8 @@
 .lifecycle__stage.is-active .lifecycle__marker {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
-  box-shadow: 0 6px 16px rgba(23, 74, 139, 0.28);
+  color: var(--accent-contrast);
+  box-shadow: var(--shadow-active);
 }
 .lifecycle__stage.is-active .lifecycle__label {
   color: var(--accent);
