@@ -31,6 +31,39 @@ class Attribution:
 
 
 @dataclass
+class Factor:
+    """A single interpreted contributor to a local explanation."""
+
+    feature: str
+    label: str  # human-readable feature label
+    direction: str  # "toward_prediction" | "away_from_prediction"
+    strength: str  # "strong" | "moderate" | "small"
+    value: float  # the SHAP/LIME attribution value (signed)
+
+
+@dataclass
+class Interpretation:
+    """Deterministic natural-language interpretation of a local explanation.
+
+    Built purely from the attribution signs/magnitudes, the predicted output, and the
+    method - no external model, no fabricated feature meanings. Describes *influence on
+    the prediction*, never causation.
+    """
+
+    method: str  # "SHAP" | "LIME"
+    scope_label: str  # e.g. "Local explanation for this prediction"
+    prediction_label: str  # e.g. "Malignant" / "Class 1" / "Predicted value: 84.2"
+    summary: str
+    supporting_factors: list[Factor] = field(default_factory=list)
+    opposing_factors: list[Factor] = field(default_factory=list)
+    other_note: str | None = None
+    caveat: str = _CAVEAT
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
 class Explanation:
     """A structured explanation for a single prediction or global importance."""
 
@@ -41,9 +74,120 @@ class Explanation:
     attributions: list[Attribution] = field(default_factory=list)
     base_value: float | None = None
     caveat: str = _CAVEAT
+    # Optional deterministic natural-language layer (local explanations only).
+    interpretation: Interpretation | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def humanize_feature(name: str) -> str:
+    """Turn a feature id into a readable label (underscores -> spaces, capitalized).
+
+    Only reformats the given name; it never invents a definition or meaning.
+    """
+    cleaned = str(name).replace("_", " ").strip()
+    if not cleaned:
+        return str(name)
+    return cleaned[0].upper() + cleaned[1:]
+
+
+def _strength(magnitude: float, max_magnitude: float) -> str:
+    if max_magnitude <= 0:
+        return "small"
+    ratio = magnitude / max_magnitude
+    if ratio >= 0.66:
+        return "strong"
+    if ratio >= 0.33:
+        return "moderate"
+    return "small"
+
+
+def _join(labels: list[str]) -> str:
+    if not labels:
+        return ""
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) == 2:
+        return f"{labels[0]} and {labels[1]}"
+    return ", ".join(labels[:-1]) + f", and {labels[-1]}"
+
+
+def interpret_explanation(
+    explanation: Explanation,
+    *,
+    prediction_label: str,
+    task: str,
+    top_k: int = 3,
+    min_fraction: float = 0.05,
+) -> Interpretation:
+    """Build a deterministic natural-language interpretation of a local explanation.
+
+    ``prediction_label`` is the class name (classification) or a formatted value string
+    (regression). ``task`` is "classification" or "regression". The interpretation
+    describes how features *pushed the prediction*, never causation.
+    """
+    method_label = explanation.method.upper()
+    # Rank by absolute attribution; keep only non-negligible contributors.
+    attrs = list(explanation.attributions)
+    max_mag = max((abs(a.attribution) for a in attrs), default=0.0)
+    threshold = max_mag * min_fraction
+    ranked = sorted(
+        (a for a in attrs if abs(a.attribution) > threshold),
+        key=lambda a: abs(a.attribution),
+        reverse=True,
+    )
+
+    def _factor(a: Attribution, toward: bool) -> Factor:
+        return Factor(
+            feature=a.feature,
+            label=humanize_feature(a.feature),
+            direction="toward_prediction" if toward else "away_from_prediction",
+            strength=_strength(abs(a.attribution), max_mag),
+            value=float(a.attribution),
+        )
+
+    # Positive attribution => pushed toward the explained output; negative => away.
+    supporting = [_factor(a, True) for a in ranked if a.attribution > 0][:top_k]
+    opposing = [_factor(a, False) for a in ranked if a.attribution < 0][:top_k]
+
+    n_shown = len(supporting) + len(opposing)
+    other_note = "Other features had smaller effects." if len(ranked) > n_shown else None
+
+    # Build the 2-4 sentence summary.
+    if task == "regression":
+        sent1 = f"Predicted value: {prediction_label}."
+        toward_phrase = "increased the predicted value relative to the explanation baseline"
+        away_phrase = "pushed the predicted value lower"
+    else:
+        sent1 = f"Prediction: {prediction_label}."
+        toward_phrase = f"pushed the prediction toward {prediction_label}"
+        away_phrase = "pushed the prediction the other way"
+
+    parts = [sent1]
+    if supporting:
+        names = _join([f.label for f in supporting])
+        parts.append(f"The prediction was influenced most by {names}, which {toward_phrase}.")
+    elif opposing:
+        names = _join([f.label for f in opposing])
+        parts.append(f"The strongest contributors were {names}, which {away_phrase}.")
+    else:
+        parts.append("No single feature had a notable influence on this prediction.")
+
+    if supporting and opposing:
+        parts.append(f"{_join([f.label for f in opposing])} {away_phrase}.")
+
+    summary = " ".join(parts)
+
+    return Interpretation(
+        method=method_label,
+        scope_label="Local explanation for this prediction",
+        prediction_label=prediction_label,
+        summary=summary,
+        supporting_factors=supporting,
+        opposing_factors=opposing,
+        other_note=other_note,
+    )
 
 
 def _row_frame(features: dict[str, float], feature_names: list[str]) -> pd.DataFrame:

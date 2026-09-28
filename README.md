@@ -1,207 +1,677 @@
 # DriftTrace
 
-**An intelligent, model-agnostic ML monitoring and root-cause diagnosis system.**
+**An End-to-End MLOps System for Automated Root-Cause Analysis of ML Drift**
 
-## What it does
+DriftTrace is a student MLOps project that monitors a machine-learning model after deployment, detects when the input data has changed, and helps identify **where that change most likely started**.
 
-DriftTrace watches a deployed model and finds *why* it starts to drift, not just *that*
-it did. It:
+The main idea is simple:
 
-- detects data drift per feature using the **KS-test** and **PSI**
-- identifies which features are affected
-- when a dependency graph is provided, traces upstream through it (**NetworkX**) to the
-  earliest drifted node — the **root-cause candidate** — and marks downstream drift as
-  **symptoms**
-- turns related drift signals into one focused **incident / alert**
-- provides **SHAP / LIME** explanations for predictions
-- supports **operator-approved** actions (never automatic)
+> **Detect drift → Trace dependencies → Identify a likely root cause → Show symptoms → Let a human decide what to do**
 
-Instead of firing a separate alarm for every drifted feature, DriftTrace turns a wall of
-alerts into one actionable diagnosis and lets a human decide the response.
+The current implementation is **model-agnostic for supported scikit-learn models**. A fresh clone does not contain a built-in production model; the user supplies a model bundle.
 
-## Model-agnostic by design
+---
 
-You upload a **model bundle**; DriftTrace inspects it, you activate it, and its incoming
-predictions become monitoring data. There is **no built-in, default, or fallback model** —
-a fresh install starts with no model active.
+## 1. About the Project
 
-```
-USER MODEL BUNDLE
-    -> MODEL ADAPTER (scikit-learn)
-    -> STANDARDIZED PREDICTION EVENT
-    -> DRIFTTRACE CORE -> KS / PSI
-    -> OPTIONAL DEPENDENCY GRAPH + RCA
-    -> INCIDENT / REPORT / EXPLANATION
-    -> HUMAN OPERATOR
-```
+A machine-learning model can work well during development and still behave differently after deployment. One common reason is **data drift**: the data reaching the model changes over time.
 
-The adapter layer (`src/drifttrace/adapters/`) is the only thing that touches the model.
-The MVP implements **one adapter — scikit-learn** (classifiers, regressors, and
-`Pipeline` objects). XGBoost / LightGBM / ONNX / PyTorch are possible future adapters and
-are **not** implemented.
+A basic monitoring system can tell us:
 
-## The model bundle (three files)
+> “Several features are different from the reference data.”
 
-Upload a single `.zip` containing:
+But that still leaves a practical question:
 
-```
+> **“Which change is most likely the starting point?”**
+
+DriftTrace addresses this by combining:
+
+- reference-based statistical drift detection
+- an optional dependency graph
+- upstream root-cause tracing
+- downstream symptom identification
+- prediction explanations using SHAP and LIME
+- a simple web UI
+- human-controlled operational actions
+
+The important distinction is that **drift detection and root-cause diagnosis are different steps**. DriftTrace first finds what changed, then uses dependency information to trace related changes upstream.
+
+---
+
+## 2. How DriftTrace Works
+
+### Step 1 — Upload a model bundle
+
+The current user contract is intentionally small:
+
+```text
 my_model.drift.zip
-├── model.pkl        (required)  the trained scikit-learn model or Pipeline
-├── reference.csv    (required)  the reference/baseline data for that model
-└── graph.json       (optional)  feature dependency edges for stronger RCA
+├── model.pkl
+├── reference.csv
+└── graph.json        # optional
 ```
 
-- **model.pkl** — any supported scikit-learn estimator or `Pipeline` (preprocessing +
-  estimator is one deployable model; DriftTrace does not recreate preprocessing). `.joblib`
-  and `.pickle` are also accepted.
-- **reference.csv** — defines the feature schema and the drift baseline for *that* model.
-  Each model has its own reference data. Numeric columns get KS/PSI; categorical columns
-  get frequency PSI.
-- **graph.json** *(optional)* — dependency edges, e.g.
-  `{"edges": [["feature_a", "feature_b"], ["feature_b", "feature_c"]]}`. When present, RCA
-  traces drift upstream. When absent, drift detection still works but root-cause tracing is
-  unavailable (a normal state, not an error).
+### `model.pkl`
+The trained, supported scikit-learn model.
 
-DriftTrace derives framework, model name, task (classification/regression), feature list,
-and probability support automatically. It only asks for genuinely missing information.
+### `reference.csv`
+The reference or baseline data. DriftTrace uses this to understand what the model normally sees.
 
-## Main technologies
+### `graph.json` (optional)
+A declared dependency graph describing how important features are related.
 
-Python, scikit-learn, FastAPI, NetworkX, SciPy, SHAP / LIME, React + TypeScript + Vite.
-Runtime is **local-first**: a Python virtualenv for the backend and Node/Vite for the
-dashboard. **No Docker.** An optional, separately-run Redpanda broker is supported but not
-required.
+A graph is **not required** for model loading, prediction, or basic drift detection. Without it, dependency-based upstream tracing is unavailable.
 
-## Prerequisites
+### Step 2 — Inspect and activate the model
 
-- **Python 3.11+** (`requires-python >= 3.11`)
-- **Node.js / npm** (for the dashboard)
-- **Git**
+DriftTrace inspects the uploaded model and identifies information such as:
 
-No Docker, no message broker, and no cloud account are required.
+- model framework
+- task type
+- feature names
+- classification or regression behavior
+- supported probability/output capabilities
 
-## Fresh clone -> running
+The selected bundle becomes the active model used by the API.
 
-```powershell
-# 1. Clone
+### Step 3 — Make predictions
+
+Predictions are served through FastAPI.
+
+Each prediction can produce a standardized monitoring event containing information such as:
+
+```text
+timestamp
+features
+prediction / output
+probability when available
+model information
+```
+
+### Step 4 — Compare current data with the reference
+
+DriftTrace compares recent observations against the reference baseline using statistical methods such as **KS-test and PSI**.
+
+Conceptually:
+
+```text
+Reference data
+      ↓
+Current observations
+      ↓
+KS + PSI
+      ↓
+No drift / Drift detected
+```
+
+### Step 5 — Trace drift through the graph
+
+When `graph.json` exists, DriftTrace checks which affected nodes are upstream or downstream of each other.
+
+Example:
+
+```text
+mean_radius
+      ↓
+mean_perimeter
+      ↓
+mean_area
+      ↓
+prediction
+```
+
+If all three feature nodes are affected by the controlled scenario, the upstream node can be reported as the **root-cause candidate**, while the later nodes are retained as **symptoms**.
+
+The graph is used for **tracing**, not for automatically propagating drift.
+
+### Step 6 — Explain a prediction
+
+For a specific prediction, DriftTrace can generate local explanations using **SHAP** or **LIME**.
+
+These answer a different question from RCA:
+
+> **RCA:** Where does the drift likely start?
+
+> **SHAP/LIME:** Which features influenced this particular prediction?
+
+### Step 7 — Human decision
+
+DriftTrace does not silently replace a production model.
+
+The operator reviews the evidence and decides what action should be taken, such as investigating the data, approving rollback, or approving retraining.
+
+---
+
+## 3. Installation and Setup
+
+## System Requirements
+
+### Backend
+
+- Windows, Linux, or macOS
+- Python **3.11 or newer**
+- Python **3.13.5** has been used successfully for the current project
+- 8 GB RAM recommended
+- Git
+
+### Frontend
+
+- Node.js and npm
+- A current Node.js LTS release is recommended
+
+### Browser
+
+Any modern Chrome, Edge, Firefox, or Safari browser.
+
+### Optional
+
+- Kafka/Redpanda can be used through the available streaming adapter, but it is **not required for the normal local demo**.
+
+---
+
+## Fresh Setup
+
+### 1. Clone the repository
+
+```bash
 git clone https://github.com/shlokn678/DriftTrace.git
 cd DriftTrace
+```
 
-# 2. Set up (creates .venv, installs the project, prepares runtime dirs). One command.
-#    It does NOT create or train any model.
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1
+### 2. Create a Python virtual environment
 
-# 3. Start the backend API
-.\.venv\Scripts\python.exe -m drifttrace.cli.main serve --host 127.0.0.1 --port 8000
+#### Windows PowerShell
 
-# 4. Start the dashboard (second terminal)
+```powershell
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+#### Linux / macOS
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 3. Install DriftTrace
+
+```bash
+python -m pip install --upgrade pip
+pip install -e ".[serving,explain,dev,streaming]"
+```
+
+The project supports the core dependencies through `pyproject.toml` and keeps optional integrations separate from the main monitoring core.
+
+### 4. Generate the local test-model bundles
+
+The current repository contains tools for generating the five validation models locally:
+
+```bash
+python scripts/generate_test_models.py
+```
+
+This creates test bundles under:
+
+```text
+artifacts/test_models/
+```
+
+These generated bundles are runtime test artifacts and are intentionally not treated as normal source-code files.
+
+### 5. Validate the test models
+
+```bash
+python scripts/validate_test_models.py
+```
+
+### 6. Start the backend
+
+From the project root:
+
+```bash
+python -m drifttrace.cli.main serve --host 127.0.0.1 --port 8000
+```
+
+The backend should be available at:
+
+```text
+http://127.0.0.1:8000
+```
+
+Health check:
+
+```text
+http://127.0.0.1:8000/health
+```
+
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+### 7. Start the frontend
+
+Open another terminal:
+
+```bash
 cd frontend
+npm install
 npm run dev
 ```
 
-Open the dashboard at **http://localhost:5173** (API at **http://localhost:8000**). On
-first open, **no model is active** — upload a bundle to begin.
+Open the local URL shown by Vite, normally:
 
-On Linux/macOS use `bash scripts/setup.sh` for step 2 and
-`./.venv/bin/python -m drifttrace.cli.main serve ...` for step 3.
-
-## Using DriftTrace
-
-### 1. Upload and activate a model
-
-In the dashboard, drop your bundle `.zip` onto **Add Model** (or browse). DriftTrace
-inspects it and shows the framework, task, features, reference status, and whether a graph
-was provided. Click **Use this model** to make it the **active model** — `/predict` now
-serves it. **Deactivate** clears it (there is no fallback).
-
-Via the API directly:
-
-```powershell
-# Upload a bundle .zip and inspect it
-curl.exe -F "file=@my_model.drift.zip" http://localhost:8000/models/upload
-# Activate the returned model id
-curl.exe -X POST http://localhost:8000/models/<model_id>/activate
-# See the active model (or the explicit no-model state)
-curl.exe http://localhost:8000/models/active
+```text
+http://localhost:5173/
 ```
 
-### 2. Predict
+---
 
-Predictions use the active model's own feature names (no domain-specific fields):
+## Quick Validation
 
-```powershell
-curl.exe -X POST http://localhost:8000/predict `
-  -H "Content-Type: application/json" `
-  -d '{\"features\": {\"feature_a\": 1.2, \"feature_b\": 5, \"feature_c\": 0.3}}'
+Run the backend test suite:
+
+```bash
+python -m pytest -q
 ```
 
-Each successful prediction emits a standardized event that feeds monitoring.
+Run the API smoke workflow:
 
-### 3. Run a drift test
-
-A generic drift test perturbs a sample of the active model's reference data and runs it
-through the real KS/PSI + RCA pipeline (no fabricated results):
-
-```powershell
-curl.exe -X POST http://localhost:8000/demo/run-drift-test `
-  -H "Content-Type: application/json" `
-  -d '{\"intensity\": 2.0, \"n\": 300, \"seed\": 7}'
+```bash
+python scripts/smoke_api.py
 ```
 
-In the dashboard, use **Run Drift Test** under **View Details**. With a dependency graph,
-the earliest drifted feature is reported as the root cause and downstream features as
-symptoms; without a graph, the affected features are listed and the origin is
-"undetermined".
+The latest verified project state reports:
 
-### 4. Check the diagnosis
+- **102 tests passed**
+- **0 failed**
+- **0 skipped**
+- frontend TypeScript check passed
+- frontend production build passed
+- **15/15** smoke checks passed
+- **5/5** generated model bundles passed validation
 
-```powershell
-curl.exe http://localhost:8000/rca/latest      # latest persisted monitoring/RCA report
+---
+
+## 4. Core Features
+
+### Model-agnostic onboarding
+
+Users can supply different supported scikit-learn models instead of using one fixed domain model.
+
+### Classification and regression
+
+The current adapter has been validated with both classification and regression workflows.
+
+### scikit-learn Pipelines
+
+A preprocessing + estimator Pipeline can be treated as one deployable model.
+
+### Reference-based drift detection
+
+Every active model has its own reference dataset.
+
+### KS-test
+
+Measures how different two numerical distributions are.
+
+### PSI
+
+Measures how much the current population has shifted relative to the reference population.
+
+### Categorical drift
+
+Categorical features can be compared using frequency-based drift calculations.
+
+### Output / prediction monitoring
+
+Prediction output can also be monitored when enough output observations are available.
+
+### Dependency-aware RCA
+
+An optional graph lets DriftTrace trace affected nodes upstream and separate a likely origin from downstream symptoms.
+
+### Graceful no-graph behavior
+
+A model does not stop working just because it has no `graph.json`. Prediction and drift detection can still be used; dependency-based upstream tracing simply cannot be established.
+
+### SHAP explanations
+
+Explains how individual feature contributions influenced one prediction.
+
+### LIME explanations
+
+Creates a local approximation around one prediction and reports which features influenced it.
+
+### Human-readable explanation layer
+
+The UI converts raw SHAP/LIME contributions into short sentences such as:
+
+> “The prediction was influenced most by Support calls, Engagement score, and Service score...”
+
+The raw technical values remain available.
+
+### Human-in-the-loop operation
+
+Operational changes such as rollback or retraining are not performed silently by the system.
+
+### Web UI
+
+The React frontend displays:
+
+- active model
+- system status
+- predictions
+- drift status
+- KS/PSI details
+- root-cause information
+- affected features
+- SHAP/LIME explanations
+- model switching
+- technical diagnostic details
+
+---
+
+## 5. Current Tech Stack
+
+| Layer | Technology | Current status |
+|---|---|---|
+| Language | Python | Current backend language |
+| API | FastAPI | Implemented and verified |
+| ML | scikit-learn | Current and tested adapter |
+| Statistics | SciPy | KS-test and statistical calculations |
+| Data | NumPy + pandas | Reference and monitoring data |
+| Graphs | NetworkX | Dependency graph + RCA |
+| Validation | Pydantic / PyYAML | API/config validation |
+| Explainability | SHAP + LIME | Local prediction explanations |
+| Frontend | React + TypeScript + Vite | Current UI |
+| Version control | Git | Project source control |
+| CI | GitHub Actions | Current validation workflow |
+| Streaming adapter | Kafka API / Redpanda via `confluent-kafka` | Code present; not verified against a live broker in the current demo |
+
+### Technologies not in the current active architecture
+
+Some technologies appeared in the original project plan but were removed or deferred from the current final runtime:
+
+- **MLflow** — removed/deferred from the current model-upload architecture
+- **Apache Airflow** — removed/deferred from the current runtime
+- **Docker** — removed from the current local-first architecture
+- **Prometheus / Grafana** — future/stretch
+- **AWS SageMaker** — future/stretch
+- **Automatic graph learning / GNNs** — future research direction
+
+This README intentionally separates completed functionality from planned extensions.
+
+---
+
+## 6. Simple Definitions of the Main Concepts
+
+### Machine-learning model
+
+A trained program that uses input data to produce a prediction or output.
+
+**Here:** DriftTrace loads a supported trained scikit-learn model and serves its predictions.
+
+### Model-agnostic
+
+The monitoring system does not depend on one fixed set of feature names or one fixed business domain.
+
+**Here:** different supported scikit-learn models can be uploaded using their own feature schemas and reference data.
+
+### Reference data / baseline
+
+A dataset representing what “normal” input data looked like for the model.
+
+**Here:** `reference.csv` is used as the baseline for later drift comparisons.
+
+### Data drift
+
+A change in the distribution of data reaching a model.
+
+**Example:** a feature that normally has one range of values starts receiving very different values.
+
+**Here:** DriftTrace compares recent observations with the reference distribution.
+
+### KS-test
+
+The **Kolmogorov–Smirnov test** compares two numerical distributions.
+
+It produces:
+
+- a **KS statistic** — how different the distributions are
+- a **p-value** — how strong the statistical evidence is that the distributions differ
+
+A larger KS statistic means a larger distributional difference.
+
+**Here:** DriftTrace uses KS as one part of its numerical drift decision.
+
+### PSI
+
+**Population Stability Index** measures how much a population has shifted compared with a reference population.
+
+In simple terms:
+
+> **How different is the current population from the baseline?**
+
+**Here:** PSI is used alongside KS for numerical drift detection.
+
+The current configuration treats PSI at or above **0.20** as drift evidence.
+
+### P-value
+
+A statistical measure used to judge how surprising the observed difference would be if there were no distribution change.
+
+**Here:** the KS p-value is displayed so the operator can see the statistical evidence behind the drift result.
+
+### Drifted feature
+
+A feature whose recent distribution is sufficiently different from the reference distribution according to DriftTrace's drift rules.
+
+### Dependency graph
+
+A directed graph showing which features or nodes depend on other nodes.
+
+Example:
+
+```text
+A → B → C → prediction
 ```
 
-The dashboard's default view shows the active model, system status, drift status, root
-cause, and affected features. Technical detail (KS/PSI, dependency graph, SHAP/LIME,
-metrics) is behind **View Details**.
+**Here:** `graph.json` optionally provides this information to the RCA engine.
 
-## Project structure
+### Root-cause candidate
 
+The earliest or most upstream affected node in a declared dependency chain.
+
+**Here:** if `A`, `B`, and `C` are drifting and the graph is `A → B → C`, `A` can be identified as the root-cause candidate for that controlled scenario.
+
+Important: this is a **diagnostic candidate**, not proof that A physically caused B or C.
+
+### Symptom
+
+A downstream node that is affected in the same incident but is not the earliest affected node in the dependency path.
+
+### Root-cause analysis (RCA)
+
+The process of trying to identify where an observed problem most likely began.
+
+**Here:** DriftTrace combines drift results with the declared graph to trace upstream.
+
+### Prediction event
+
+A record created around a model prediction so monitoring information can be collected.
+
+**Here:** the event can contain the timestamp, input features, prediction/output, and model information.
+
+### Monitoring window
+
+A group of recent observations analyzed together instead of checking one prediction at a time.
+
+**Here:** the current verified demo primarily uses controlled/on-demand monitoring scenarios; continuous broker-backed monitoring is a planned next extension.
+
+### SHAP
+
+**SHapley Additive exPlanations** assigns contribution values to input features for a particular prediction.
+
+Simple interpretation:
+
+- positive contribution → pushes the explanation toward the selected output
+- negative contribution → pushes it away
+- larger magnitude → stronger influence in that explanation
+
+**Here:** DriftTrace uses SHAP for **local prediction explanation**, not causal RCA.
+
+### LIME
+
+**Local Interpretable Model-agnostic Explanations** creates a simple local approximation around one prediction and uses it to estimate which features are influencing that prediction.
+
+**Here:** LIME is another local prediction-explanation method available from the UI.
+
+### Local explanation
+
+An explanation for **one particular prediction**, not a summary of the entire model.
+
+### Model adapter
+
+A small interface that lets the generic DriftTrace core communicate with a particular ML framework.
+
+**Here:** the implemented adapter is for scikit-learn.
+
+### Classification
+
+A task where the model predicts a class or category.
+
+**Example:** Class 0 vs Class 1.
+
+### Regression
+
+A task where the model predicts a numerical value.
+
+**Example:** predicting `55.76`.
+
+### Pipeline
+
+A packaged sequence of preprocessing + model steps treated as one deployable estimator.
+
+**Here:** supported scikit-learn Pipelines can be uploaded as the model itself.
+
+### Graceful degradation
+
+The system continues to provide whatever functionality is available instead of inventing missing information.
+
+**Here:** a model without `graph.json` can still predict and perform drift detection, but dependency-based upstream tracing is not available.
+
+### Human-in-the-loop
+
+The system provides evidence and recommendations while a person remains responsible for the operational decision.
+
+**Here:** DriftTrace does not silently replace the active production model.
+
+---
+
+## 7. Current Validation Results
+
+The latest implementation audit reports:
+
+### Software quality
+
+- **102 pytest tests passed**
+- **0 test failures**
+- **0 skipped tests**
+- MyPy passed on **51 source files**
+- Frontend TypeScript check passed
+- Frontend production build passed
+- API smoke workflow passed **15/15 checks**
+
+### Model validation
+
+Five generated validation bundles were tested:
+
+1. Breast Cancer Logistic Regression — classification + graph
+2. Wine Random Forest — classification, no graph
+3. Digits Extra Trees — classification, no graph
+4. Synthetic Gradient Boosting Classifier — classification + graph
+5. Synthetic Gradient Boosting Regressor — regression, no graph
+
+The latest audit reports classification test accuracy values in the **0.932–1.000** range and **R² = 0.956** for the regression validation model. These are validation-model results for testing the platform, not claims of production model performance.
+
+### Drift and RCA validation
+
+The strongest controlled scenarios produced:
+
+- PSI values of approximately **8.7–12.4** against a **0.20** drift threshold
+- extremely small KS p-values in the controlled drift scenarios
+- stable scenarios with no meaningful drift
+- graph-targeted scenarios with one upstream root-cause candidate and downstream symptoms
+
+The clean single-root RCA result depends on injecting drift into the declared dependency chain. Drift does not automatically propagate through the graph; the graph is used for tracing related drift.
+
+### Live monitoring limitation
+
+The project contains streaming/Redpanda adapter code, but the current verified demo is **on-demand/batch rather than always-on live broker monitoring**.
+
+The next planned extension is:
+
+```text
+live predictions
+      ↓
+event stream
+      ↓
+sliding / tumbling window
+      ↓
+automatic KS + PSI
+      ↓
+RCA
+      ↓
+alert / dashboard
 ```
-src/drifttrace/
-  bundle/     model bundle: loader (zip/dir), reference profiling, graph.json parsing
-  adapters/   model-agnostic adapter layer (scikit-learn adapter)
-  drift/      KS/PSI engine + baseline + config
-  graph/      NetworkX dependency-graph DAG
-  rca/        root-cause analysis
-  streaming/  prediction-event schema + windowing + monitor + file source
-  serving/    FastAPI app + onboarding/active-model registry
-  explain/    SHAP / LIME
-  governance/ audit + privacy + operator (approval) + report
-  bootstrap.py  fresh-clone setup (runtime dirs only; trains no model)
-frontend/     React + TypeScript + Vite dashboard
-config/       drift.yaml (thresholds) + governance.yaml (PII / fairness config)
-scripts/      setup.ps1 / setup.sh + dev helpers
-docs/         architecture, runbook, governance checklist
-data/ artifacts/ reports/   runtime outputs (git-ignored; artifacts/uploaded_models holds bundles)
+
+---
+
+## 8. Project Structure
+
+```text
+DriftTrace/
+├── src/drifttrace/          # backend and core monitoring logic
+├── frontend/                # React + TypeScript UI
+├── tests/                   # automated tests
+├── scripts/                 # setup, smoke and test-model utilities
+├── config/                  # runtime configuration
+├── docs/                    # project documentation
+├── artifacts/               # generated runtime/test artifacts
+├── reports/                 # generated reports
+├── pyproject.toml           # Python package + dependencies
+└── README.md                # this file
 ```
 
-## Troubleshooting
+---
 
-- **`Python 3.11+ is required`** — install Python 3.11+; on Windows the `py` launcher
-  (`py -3.13`) is used automatically if present.
-- **`/ready` returns `ready: false`** — no model is active. Upload and activate a bundle.
-- **Dashboard shows values as unavailable** — the API is not reachable on port 8000; the
-  dashboard proxies `/api` to it in dev.
-- **`/predict` returns 503** — no active model. Activate a bundle first.
+## 9. Important Limitations
 
-## Limitations
+1. **scikit-learn is the only implemented model adapter.** Other frameworks such as XGBoost, LightGBM, ONNX and PyTorch are future work.
+2. **Continuous broker-backed monitoring is not the current demo path.** The current verified monitoring flow is on-demand/batch.
+3. **RCA depends on graph quality.** A declared graph describes the dependency information available to the system; it does not automatically prove causal relationships.
+4. **A clean one-root showcase requires controlled drift aligned with the declared graph chain.** Broad all-feature drift can naturally create multiple independent root candidates.
+5. **The current project is local-first.** Production cloud deployment and dashboard infrastructure are future/stretch work.
 
-- Only the **scikit-learn** adapter is implemented (classification, regression, Pipeline).
-- The onboarding/active-model registry is **in-memory** per process; there is no database.
-- Reference data must contain the model's feature columns; categorical drift uses frequency
-  comparison.
-- Fairness analysis is unavailable unless a sensitive attribute is declared in
-  `config/governance.yaml` (never inferred).
-- DriftTrace does not train or retrain models; retraining happens outside DriftTrace and you
-  upload the new bundle.
-- **Prometheus/Grafana**, **AWS SageMaker**, graph learning, and temporal GNNs are out of
-  scope. Redpanda is optional and not required.
+---
+
+## 10. Future Scope
+
+- continuous Kafka/Redpanda monitoring with sliding/tumbling windows
+- always-on asynchronous drift monitoring
+- alert/dashboard integration
+- broader model adapters
+- Prometheus / Grafana integration
+- cloud deployment such as AWS SageMaker
+- automatic graph learning
+- temporal dependency reasoning
+- graph neural network approaches for future research
+
+---
+
+## Project Goal in One Line
+
+> **DriftTrace turns “the model is drifting” into a more actionable question: “which related part changed first, what evidence supports that diagnosis, and what should the human operator investigate next?”**

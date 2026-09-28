@@ -142,6 +142,25 @@ export interface Attribution {
   attribution: number;
 }
 
+export interface ExplanationFactor {
+  feature: string;
+  label: string;
+  direction: "toward_prediction" | "away_from_prediction";
+  strength: "strong" | "moderate" | "small";
+  value: number;
+}
+
+export interface Interpretation {
+  method: string;
+  scope_label: string;
+  prediction_label: string;
+  summary: string;
+  supporting_factors: ExplanationFactor[];
+  opposing_factors: ExplanationFactor[];
+  other_note: string | null;
+  caveat: string;
+}
+
 export interface Explanation {
   method: "shap" | "lime";
   scope: "local" | "global";
@@ -150,6 +169,7 @@ export interface Explanation {
   attributions: Attribution[];
   base_value: number | null;
   caveat: string;
+  interpretation: Interpretation | null;
 }
 
 // ---- Drift test (generic; perturbs the active model's reference data) ----

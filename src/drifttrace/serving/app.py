@@ -95,6 +95,34 @@ def predict_one(ctx: ActiveContext, req: PredictRequest, sink: EventSink | None)
     )
 
 
+def _prediction_label(raw_model: Any, result: Any, task: str) -> str:
+    """Human-facing label for the explained prediction.
+
+    Classification: the model's own class label (via ``classes_``) when available, else
+    ``Class <n>``. Regression: a rounded predicted value string. No fabricated meanings.
+    """
+    if task == "regression":
+        value = result.output if result.output is not None else 0.0
+        return f"{float(value):.2f}"
+    classes = getattr(raw_model, "classes_", None)
+    steps = getattr(raw_model, "steps", None)
+    if classes is None and steps:
+        classes = getattr(steps[-1][1], "classes_", None)
+    pred = result.prediction
+    if classes is not None and pred is not None:
+        try:
+            label = classes[int(pred)]
+        except (IndexError, ValueError, TypeError):
+            label = None
+        if label is not None:
+            # A non-numeric class name is used as-is; a plain integer reads better as
+            # "Class N" (we never invent a semantic name the model didn't declare).
+            import numbers
+
+            return f"Class {label}" if isinstance(label, numbers.Number) else str(label)
+    return f"Class {pred}" if pred is not None else "prediction"
+
+
 def _upload_response(onboarded: Any) -> UploadModelResponse:
     return UploadModelResponse(
         model_id=onboarded.model_id if onboarded.supported else None,
@@ -223,14 +251,19 @@ def create_app(settings: ServingSettings | None = None) -> Any:
         if ctx is None:
             raise HTTPException(status_code=503, detail="no active model")
 
-        from drifttrace.explain.explainer import lime_explain_local, shap_explain_local
+        from drifttrace.explain.explainer import (
+            interpret_explanation,
+            lime_explain_local,
+            shap_explain_local,
+        )
 
         features = dict(req.features)
         background = ctx.reference_frame
+        raw_model = ctx.adapter.raw_model  # type: ignore[attr-defined]
         try:
             if req.method == "lime":
                 exp = lime_explain_local(
-                    ctx.adapter.raw_model,  # type: ignore[attr-defined]
+                    raw_model,
                     features,  # type: ignore[arg-type]
                     ctx.feature_names,
                     background,
@@ -238,7 +271,7 @@ def create_app(settings: ServingSettings | None = None) -> Any:
                 )
             else:
                 exp = shap_explain_local(
-                    ctx.adapter.raw_model,  # type: ignore[attr-defined]
+                    raw_model,
                     features,  # type: ignore[arg-type]
                     ctx.feature_names,
                     model_version=ctx.model_id,
@@ -246,6 +279,15 @@ def create_app(settings: ServingSettings | None = None) -> Any:
                 )
         except Exception as exc:  # noqa: BLE001 - explainability must not 500 the API
             raise HTTPException(status_code=500, detail=f"explanation failed: {exc}") from exc
+
+        # Deterministic natural-language interpretation on top of SHAP/LIME (no LLM).
+        try:
+            task = ctx.adapter.metadata().task or "classification"
+            result = ctx.adapter.predict_one(features)
+            label = _prediction_label(raw_model, result, task)
+            exp.interpretation = interpret_explanation(exp, prediction_label=label, task=task)
+        except Exception as exc:  # noqa: BLE001 - interpretation must not 500 the API
+            logger.warning("explanation interpretation failed: %s", exc)
         return exp.to_dict()
 
     @app.get("/metrics")
