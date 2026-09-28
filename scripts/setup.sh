@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fresh-clone setup for DriftTrace (Linux/macOS). Local-first, no Docker.
-# Mirrors scripts/setup.ps1. Safe to re-run; pass --force to rebuild dataset + model.
+# Mirrors scripts/setup.ps1. Safe to re-run. Creates no model - upload a bundle to begin.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,16 +20,12 @@ if [ ! -x "$venv_py" ]; then
   "$python" -m venv "$repo/.venv"
 fi
 
-echo "Installing DriftTrace (serving + tracking + streaming extras) ..."
+echo "Installing DriftTrace (serving + streaming + explain extras) ..."
 "$venv_py" -m pip install --upgrade pip --quiet
-"$venv_py" -m pip install -e ".[serving,tracking,streaming]"
+"$venv_py" -m pip install -e ".[serving,streaming,explain]"
 
-echo "Bootstrapping runtime state (dataset + model + baseline) ..."
-if [ "${1:-}" = "--force" ]; then
-  "$venv_py" -m drifttrace.bootstrap --force
-else
-  "$venv_py" -m drifttrace.bootstrap
-fi
+echo "Preparing runtime directories (no model is created) ..."
+"$venv_py" -m drifttrace.bootstrap
 
 if command -v npm >/dev/null 2>&1 && [ -d "$repo/frontend" ]; then
   echo "Installing frontend dependencies (npm install) ..."
@@ -42,4 +38,4 @@ echo "Start the backend:"
 echo "    ./.venv/bin/python -m drifttrace.cli.main serve --host 127.0.0.1 --port 8000"
 echo "Start the frontend (second terminal):"
 echo "    cd frontend && npm run dev"
-echo "Then open http://localhost:5173"
+echo "Then open http://localhost:5173 and upload a model bundle to begin (no model is active yet)."

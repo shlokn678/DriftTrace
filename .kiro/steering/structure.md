@@ -3,15 +3,24 @@ inclusion: always
 ---
 # DriftTrace — Structure Steering
 
-- `src/drifttrace/` core library, one subpackage per component (data, features, graph, training,
-  drift, rca, alerting, serving, streaming, explain, governance, cli). Keep it importable and
-  unit-testable without Airflow/broker. Plus `bootstrap.py` for fresh-clone setup.
-- `pipelines/airflow/dags/` thin DAG wrappers over CLI/library functions.
-- `config/` declared config: graph.yaml, schema.yaml, drift.yaml, governance.yaml.
-- `scripts/setup.ps1` fresh-clone bootstrap (local-first; no Docker).
-- `.github/workflows/` GitHub Actions CI.
-- `tests/{unit,integration,e2e}/` mirrors the testing strategy in the spec.
+- `src/drifttrace/` core library, one subpackage per component. Keep it importable and
+  unit-testable without a broker. Key packages:
+  - `bundle/` model-bundle domain: `loader` (zip/dir), `reference` (profile + baseline),
+    `graph_json` (optional graph.json -> DependencyGraph).
+  - `adapters/` model-agnostic adapter layer: `base` (interface + standardized event),
+    `sklearn_adapter` (the only implemented adapter), `registry` (detect + build + inspect).
+  - `drift/` KS/PSI engine + baseline + config. `graph/` NetworkX DAG. `rca/` root-cause
+    analysis. `streaming/` prediction-event schema + windowing + monitor + file/Redpanda
+    source. `serving/` FastAPI app + onboarding/active-model registry + schemas + config.
+  - `explain/` SHAP/LIME. `governance/` audit + privacy + operator (approval) + report.
+  - `bootstrap.py` fresh-clone setup (creates runtime dirs only; NO model is trained).
+  - `cli/` thin command wrappers (serve, webhook-stub, rollback, retrain, bootstrap).
+- `config/` declared thresholds/governance: `drift.yaml`, `governance.yaml`. Feature schema
+  and dependency graph are NOT declared here - they come from the uploaded model bundle.
+- `scripts/setup.ps1` / `scripts/setup.sh` fresh-clone bootstrap (local-first; no Docker).
+- `frontend/` React + TypeScript + Vite dashboard (upload bundle -> activate -> monitor).
+- `.github/workflows/` GitHub Actions CI. `tests/{unit,integration,e2e}/` test suite.
 - `docs/` architecture, runbook, governance checklist.
-- `data/ artifacts/ reports/` runtime outputs (git-ignored except .keep).
-- `.kiro/specs/drifttrace/` the source-of-truth spec (requirements, design, tasks, mapping,
-  decisions). Update the spec before large code changes.
+- `data/ artifacts/ reports/` runtime outputs (git-ignored except .keep); `artifacts/
+  uploaded_models/` is the local model store for onboarded bundles.
+- `.kiro/specs/drifttrace/` the source-of-truth spec. Update the spec before large changes.

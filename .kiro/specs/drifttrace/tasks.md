@@ -1,8 +1,18 @@
 # DriftTrace — Implementation Plan (Tasks)
 
 Phases follow the pitch roadmap (Reproduce -> Automate -> Deploy -> Operate -> Cloud + Future)
-and are ordered by dependency. **No code is implemented yet**; this is the plan. Each task
-references requirements from `requirements.md`.
+and are ordered by dependency. Each task references requirements from `requirements.md`.
+
+> ## SUPERSESSION NOTE (Phase 5 — final model-agnostic overhaul)
+>
+> Phases 0–4 were implemented for the loan-default application, then Phase 5 replaced that
+> application with a **model-agnostic** system: no built-in model; users upload a bundle
+> (`model.pkl` + `reference.csv` + optional `graph.json`); a scikit-learn adapter isolates
+> the model; drift/RCA are generic over any features; the dependency graph is optional; no
+> Docker; local-first. The loan generator/transform/training pipeline, the Airflow DAG, and
+> the `config/graph.yaml`/`schema.yaml` files were removed. Older loan-specific tasks below
+> are historical; the current behavior is described in `docs/architecture.md`,
+> `docs/runbook.md`, and `assumptions-and-decisions.md` (D-52..D-56).
 
 Legend: `[ ]` not started · MVP unless marked `[STRETCH]`/`[FUTURE]`.
 

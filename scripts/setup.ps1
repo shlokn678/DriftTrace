@@ -5,18 +5,16 @@
 .DESCRIPTION
     From a fresh git clone this script:
       1. creates a .venv virtual environment (if missing),
-      2. installs the project with the serving + tracking + streaming extras,
-      3. runs the deterministic bootstrap (dataset + schema validation + trained/
-         registered model + drift baseline + transform params),
+      2. installs the project with the serving + streaming + explain extras,
+      3. prepares runtime directories (NO model is created - upload one to begin),
       4. prints the commands to start the backend and frontend.
 
-    Safe to re-run. Pass -Force to rebuild the dataset + model from scratch.
+    Safe to re-run.
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1
 #>
 param(
-    [switch]$Force,
     [switch]$SkipFrontend
 )
 
@@ -61,16 +59,14 @@ if (-not (Test-Path $venvPy)) {
 if (-not (Test-Path $venvPy)) { Write-Error "Virtual environment python not found at $venvPy."; exit 1 }
 
 # --- 3. Install the package with the required extras --------------------------------
-Write-Host "Installing DriftTrace (serving + tracking + streaming extras) ..." -ForegroundColor Cyan
+Write-Host "Installing DriftTrace (serving + streaming + explain extras) ..." -ForegroundColor Cyan
 & $venvPy -m pip install --upgrade pip --quiet
-& $venvPy -m pip install -e ".[serving,tracking,streaming]"
+& $venvPy -m pip install -e ".[serving,streaming,explain]"
 if ($LASTEXITCODE -ne 0) { Write-Error "Dependency installation failed."; exit 1 }
 
-# --- 4. Bootstrap the runtime state -------------------------------------------------
-Write-Host "Bootstrapping runtime state (dataset + model + baseline) ..." -ForegroundColor Cyan
-$bootstrapArgs = @("-m", "drifttrace.bootstrap")
-if ($Force) { $bootstrapArgs += "--force" }
-& $venvPy @bootstrapArgs
+# --- 4. Prepare runtime directories (no model is created) ---------------------------
+Write-Host "Preparing runtime directories (no model is created) ..." -ForegroundColor Cyan
+& $venvPy -m drifttrace.bootstrap
 if ($LASTEXITCODE -ne 0) { Write-Error "Bootstrap failed. See the message above."; exit 1 }
 
 # --- 5. Frontend dependencies (optional) --------------------------------------------
@@ -92,4 +88,4 @@ Write-Host "Start the backend:" -ForegroundColor Cyan
 Write-Host "    .\.venv\Scripts\python.exe -m drifttrace.cli.main serve --host 127.0.0.1 --port 8000"
 Write-Host "Start the frontend (second terminal):" -ForegroundColor Cyan
 Write-Host "    cd frontend; npm run dev"
-Write-Host "Then open http://localhost:5173"
+Write-Host "Then open http://localhost:5173 and upload a model bundle to begin (no model is active yet)."

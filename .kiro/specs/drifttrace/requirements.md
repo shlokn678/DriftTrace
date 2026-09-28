@@ -1,9 +1,33 @@
 # DriftTrace — Requirements
 
-**Project:** DriftTrace — An End-to-End MLOps System for Automated Root-Cause Analysis of ML Drift
+**Project:** DriftTrace — An intelligent, model-agnostic ML monitoring and root-cause diagnosis system
 **Course:** CI3203D · Machine Learning and Operations
 **Programme:** Computer Science & Engineering (Artificial Intelligence)
-**Spec status:** Planning stage. No application code implemented yet.
+**Spec status:** Implemented. See the supersession note below.
+
+> ## SUPERSESSION NOTE (Phase 5 — final model-agnostic overhaul)
+>
+> The system is now **model-agnostic** and the original loan-default application has been
+> removed. Where this document's older sections conflict with the following, the following
+> wins (see `assumptions-and-decisions.md` D-52..D-56):
+>
+> - **No built-in model.** A fresh install has no model registered and no active model.
+>   The user uploads a **bundle** = `model.pkl` (required) + `reference.csv` (required) +
+>   `graph.json` (optional), which is inspected and then activated.
+> - **Model adapter layer** (`src/drifttrace/adapters/`) isolates the model; scikit-learn is
+>   the only implemented adapter (classification, regression, and `Pipeline`). Loan-specific
+>   feature names (`income`, `credit_score`, `risk_score`, `default`, `group`) and the loan
+>   transform/generator/training pipeline are removed.
+> - **Reference data** (not a global training set) defines each model's feature schema and
+>   drift baseline. The **dependency graph is optional** and comes from `graph.json`
+>   (`config/graph.yaml`/`schema.yaml` are removed). Without a graph, drift detection works
+>   but RCA is unavailable — a normal state, not an error.
+> - **No Docker.** Local-first (Python venv + FastAPI + Node/Vite). Redpanda is optional and
+>   not required. Airflow/MLflow/DVC-specific loan orchestration was removed with the loan
+>   pipeline; the generic drift/graph/RCA/serving/governance core is preserved.
+> - Endpoints: `/health`, `/ready`, `/model-info`, `/predict` (generic feature vector),
+>   `/rca/latest`, `/explain`, `/metrics`, `/models/upload`, `/models/active`,
+>   `/models/{id}/activate`, `/models/deactivate`, `/models/{id}`, `/demo/run-drift-test`.
 
 ## 0. How to read this document
 

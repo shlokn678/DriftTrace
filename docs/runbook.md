@@ -1,10 +1,10 @@
 # DriftTrace — Runbook
 
-How to run DriftTrace locally. **No Docker, no message broker, and no cloud accounts
-or credentials are required.** The backend runs in a Python virtualenv; the dashboard
-runs with Node/Vite.
+How to run DriftTrace locally. **No Docker, no message broker, and no cloud accounts or
+credentials are required.** The backend runs in a Python virtualenv; the dashboard runs
+with Node/Vite. There is **no built-in model** — you upload one.
 
-All commands are run from the repository root. Windows examples use PowerShell; the
+All commands run from the repository root. Windows examples use PowerShell; the
 `.\.venv\Scripts\python.exe` prefix becomes `./.venv/bin/python` on Linux/macOS.
 
 ---
@@ -15,13 +15,12 @@ All commands are run from the repository root. Windows examples use PowerShell; 
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1
 ```
 
-This creates `.venv`, installs the project with the `serving,tracking,streaming`
-extras, and runs the bootstrap (dataset + schema validation + trained/registered model
-+ drift baseline). Cross-platform equivalent:
+This creates `.venv`, installs the project (`serving,tracking,streaming` extras), and
+prepares runtime directories. It does **not** create, train, or activate any model.
+Cross-platform equivalent:
 
 ```powershell
-.\.venv\Scripts\python.exe -m drifttrace.bootstrap          # reuse existing state
-.\.venv\Scripts\python.exe -m drifttrace.bootstrap --force  # rebuild from scratch
+.\.venv\Scripts\python.exe -m drifttrace.bootstrap
 ```
 
 Prerequisites: **Python 3.11+**, **Node.js/npm** (dashboard only), **Git**.
@@ -34,8 +33,7 @@ Prerequisites: **Python 3.11+**, **Node.js/npm** (dashboard only), **Git**.
 .\.venv\Scripts\python.exe -m drifttrace.cli.main serve --host 127.0.0.1 --port 8000
 ```
 
-The API loads the registered model at startup and stays up (reporting non-ready) if no
-model is present - re-run the bootstrap in that case.
+The API starts with **no active model** and reports non-ready until you activate one.
 
 ## 2. Start the dashboard (second terminal)
 
@@ -50,113 +48,129 @@ Dashboard: http://localhost:5173. API: http://localhost:8000.
 ## 3. Verify the API
 
 ```powershell
-curl.exe http://localhost:8000/health        # {"status":"ok"}
-curl.exe http://localhost:8000/ready          # {"ready":true,"model_version":"...",...}
-curl.exe http://localhost:8000/model-info     # model name + features + loaded
-curl.exe http://localhost:8000/models/active  # active model (custom or default loan)
+curl.exe http://localhost:8000/health         # {"status":"ok"}
+curl.exe http://localhost:8000/ready           # {"ready":false,...} until a model is active
+curl.exe http://localhost:8000/models/active   # {"active":false,...} on a fresh install
 ```
 
-Make a prediction:
+---
+
+## 4. Build a model bundle
+
+A bundle is a `.zip` of `model.pkl` + `reference.csv` (+ optional `graph.json`). Any
+scikit-learn estimator or `Pipeline` works. Example (adapt to your own model):
+
+```python
+import io, json, zipfile, cloudpickle
+import numpy as np, pandas as pd
+from sklearn.linear_model import LogisticRegression
+
+rng = np.random.default_rng(0)
+ref = pd.DataFrame({
+    "feature_a": rng.normal(40, 10, 400),
+    "feature_b": rng.normal(50000, 12000, 400),
+    "feature_c": rng.normal(5, 2, 400),
+})
+y = (ref["feature_b"] + ref["feature_a"] * 100 > 55000).astype(int)
+model = LogisticRegression(max_iter=200).fit(ref, y)
+
+with zipfile.ZipFile("my_model.drift.zip", "w") as zf:
+    buf = io.BytesIO(); cloudpickle.dump(model, buf)
+    zf.writestr("model.pkl", buf.getvalue())
+    zf.writestr("reference.csv", ref.to_csv(index=False))
+    # optional graph for RCA:
+    zf.writestr("graph.json", json.dumps(
+        {"edges": [["feature_a", "feature_b"], ["feature_b", "feature_c"]]}))
+```
+
+Omit `graph.json` to see the no-graph behavior (drift only, no root-cause tracing).
+
+## 5. Upload and activate the model
+
+```powershell
+# Upload the bundle .zip and inspect it
+curl.exe -F "file=@my_model.drift.zip" http://localhost:8000/models/upload
+# -> returns model_id, task, features, reference/dependencies availability
+
+# Activate it ("Use this model") - /predict now serves it
+curl.exe -X POST http://localhost:8000/models/<model_id>/activate
+
+# Deactivate (there is no fallback; monitoring stops)
+curl.exe -X POST http://localhost:8000/models/deactivate
+```
+
+In the dashboard: drop the bundle onto **Add Model**, review the inspection, then click
+**Use this model**.
+
+## 6. Predict
+
+Use the active model's own feature names:
 
 ```powershell
 curl.exe -X POST http://localhost:8000/predict `
   -H "Content-Type: application/json" `
-  -d '{\"income\": 4200.0, \"request_id\": \"demo-1\"}'
+  -d '{\"features\": {\"feature_a\": 40, \"feature_b\": 60000, \"feature_c\": 5}}'
 ```
 
-The response includes `prediction`, `probability`, derived `features`, the serving
-`model_version`, and `event_emitted: true`. Prediction events are appended to a local
-JSON-lines file (`reports/events.jsonl` by default) - no broker involved.
+The response has `prediction` (class, or `null` for regressors), `probability`, `output`
+(numeric), the `features` used, and `event_emitted: true`. Events are appended to
+`reports/events.jsonl` (no broker).
 
----
+## 7. Run a drift test -> RCA (real pipeline)
 
-## 4. Model onboarding + activation
-
-```powershell
-# Upload one model file (.pkl / .pickle / .joblib); DriftTrace inspects it
-curl.exe -F "file=@model.pkl" http://localhost:8000/models/upload
-
-# Activate the returned model id ("Use this model") - /predict now serves it
-curl.exe -X POST http://localhost:8000/models/<model_id>/activate
-
-# Restore the default loan model
-curl.exe -X POST http://localhost:8000/models/deactivate
-```
-
-In the dashboard, use **Add Model** (drag/drop or browse), then **Use this model**.
-The default loan model is always the fallback. Reference data and the dependency graph
-are reused automatically; only genuinely missing information is requested.
-
----
-
-## 5. Drift demo -> RCA (real Phase 4 pipeline, broker-free)
-
-The simplest path runs a deterministic scenario in-process through the exact drift ->
-RCA -> report -> alert pipeline and writes `reports/latest_rca.json`:
+Perturbs a sample of the active model's reference data and runs the real KS/PSI + RCA
+pipeline, writing `reports/latest_rca.json`:
 
 ```powershell
-# Main pitch demo: monthly -> annual income. Expect income = ROOT CAUSE;
-# credit_score + risk_score = SYMPTOMS; exactly one alert.
-curl.exe -X POST http://localhost:8000/demo/run-scenario `
+# Drift test (shift the reference distribution)
+curl.exe -X POST http://localhost:8000/demo/run-drift-test `
   -H "Content-Type: application/json" `
-  -d '{\"scenario\": \"income_annual\", \"n\": 300, \"seed\": 7}'
+  -d '{\"intensity\": 2.0, \"n\": 300, \"seed\": 7}'
+
+# Baseline test (no shift -> expect no drift)
+curl.exe -X POST http://localhost:8000/demo/run-drift-test `
+  -H "Content-Type: application/json" `
+  -d '{\"intensity\": 0.0, \"n\": 300, \"seed\": 7}'
 ```
 
-Scenarios: `control` (no drift), `income_annual` (income root), `mid_chain`
-(credit_score root), `two_roots`. List them: `curl.exe http://localhost:8000/demo/scenarios`.
+With a graph, the earliest drifted feature is the root cause and downstream features are
+symptoms. Without a graph, features are independent — drift is reported but the origin is
+undetermined. In the dashboard, use **Run Drift Test** under **View Details**.
 
-### CLI equivalent (file replay, no broker)
+## 8. Check the diagnosis
 
 ```powershell
-.\.venv\Scripts\python.exe -m drifttrace.cli.main demo-generate --out reports\demo --n 300 --seed 7
-.\.venv\Scripts\python.exe -m drifttrace.cli.main replay --file reports\demo\events_income_annual.jsonl `
-  --window-size 300 --min-samples 30
+curl.exe http://localhost:8000/rca/latest      # latest persisted monitoring/RCA report
+Get-Content reports\latest_rca.json             # same report on disk
+Get-Content reports\alerts.jsonl                # emitted alerts (root-cause only)
 ```
 
-Add `--webhook-url http://localhost:9000/alert` if you are running the local webhook
-stub (`... webhook-stub --port 9000`) and want to see alert delivery.
-
-## 6. Check drift results / RCA / reports / alerts
+## 9. Explainability (SHAP / LIME), off the prediction hot path
 
 ```powershell
-curl.exe http://localhost:8000/rca/latest          # latest persisted RCA report
-Get-Content reports\latest_rca.json                 # same report on disk
-Get-Content reports\alerts.jsonl                    # emitted alerts (root-cause only)
+curl.exe -X POST http://localhost:8000/explain -H "Content-Type: application/json" `
+  -d '{\"features\": {\"feature_a\": 40, \"feature_b\": 60000, \"feature_c\": 5}, \"method\": \"shap\"}'
 ```
 
-Or open the dashboard: the simple view shows the root cause and affected features; KS/PSI
-evidence and the dependency graph are under **View Details**.
+Use `"method": "lime"` for the secondary explainer. Attribution is not proof of a causal
+root cause — it is kept separate from RCA.
 
----
+## 10. Operator actions (approval required; audited)
 
-## 7. Explainability (SHAP / LIME), off the prediction hot path
-
-```powershell
-curl.exe -X POST http://localhost:8000/explain -H "Content-Type: application/json" -d '{\"income\": 4200.0, \"method\": \"shap\"}'
-curl.exe -X POST http://localhost:8000/explain -H "Content-Type: application/json" -d '{\"income\": 4200.0, \"method\": \"lime\"}'
-# CLI:
-.\.venv\Scripts\python.exe -m drifttrace.cli.main explain --income 4200 --method shap
-```
-
-## 8. Governance (fairness + privacy)
-
-```powershell
-.\.venv\Scripts\python.exe -m drifttrace.cli.main governance
-```
-
-## 9. Operator actions (approval required; audited)
+DriftTrace never rolls back or retrains automatically. Because models are uploaded (not
+trained here), `retrain` records the decision only — you retrain outside DriftTrace and
+upload the new bundle.
 
 ```powershell
 # Rejected without approval (exit code 2):
-.\.venv\Scripts\python.exe -m drifttrace.cli.main rollback --to-version 1
+.\.venv\Scripts\python.exe -m drifttrace.cli.main rollback --to-model <id>
 # Approved (audited):
-.\.venv\Scripts\python.exe -m drifttrace.cli.main rollback --to-version 1 --approve --approver alice
-# Retrain requires approval too:
+.\.venv\Scripts\python.exe -m drifttrace.cli.main rollback --to-model <id> --approve --approver alice
 .\.venv\Scripts\python.exe -m drifttrace.cli.main retrain --approve --approver alice
-Get-Content reports\audit_log.jsonl                 # audit trail
+Get-Content reports\audit_log.jsonl
 ```
 
-## 10. Metrics (Prometheus-compatible text; no Prometheus/Grafana installed)
+## 11. Metrics (Prometheus-compatible text; no Prometheus/Grafana installed)
 
 ```powershell
 curl.exe http://localhost:8000/metrics
@@ -164,35 +178,32 @@ curl.exe http://localhost:8000/metrics
 
 ---
 
-## MLflow UI (optional)
+## Model switching
 
-MLflow uses a local SQLite backend by default (`mlflow.db` in the repo root). To browse
-runs and the model registry:
-
-```powershell
-.\.venv\Scripts\python.exe -m mlflow ui --backend-store-uri "sqlite:///mlflow.db"
-```
-
-Then open http://localhost:5000.
+Uploading and activating a different bundle switches the active model: the feature list,
+reference baseline, and dependency graph all change, and the previous model's monitoring
+report is cleared so results never mix.
 
 ## Optional: Redpanda streaming (not required)
 
 The normal workflow is broker-free. If you separately run a Redpanda/Kafka broker, set
-`DRIFTTRACE_USE_REDPANDA=true` (and `REDPANDA_BROKER`) so the API emits events to a topic,
-and run the monitor against it: `... monitor --brokers localhost:9092 --limit 500`.
-This is entirely optional and outside the default demo.
+`DRIFTTRACE_USE_REDPANDA=true` (and `REDPANDA_BROKER`) so the API emits events to a topic.
+This is entirely optional and outside the default workflow.
 
 ## Notes
 
-- The MVP API is unauthenticated and intended for localhost / internal use only
-  (FR-7.6). Do not expose it publicly as-is.
-- Runtime state (`data/`, `artifacts/`, `reports/`, `mlflow.db`) is git-ignored and fully
-  reconstructed by the bootstrap - never copy it between machines.
+- The API is unauthenticated and intended for localhost / internal use only. Do not expose
+  it publicly as-is.
+- Runtime state (`data/`, `artifacts/`, `reports/`) is git-ignored; uploaded bundles live
+  under `artifacts/uploaded_models/`. Never copy runtime state between machines — re-upload
+  the bundle instead.
 
 ## Troubleshooting
 
-- **`/ready` is false** - no model loaded; run `python -m drifttrace.bootstrap`.
-- **`Python 3.11+ is required`** - install Python 3.11+; `setup.ps1` uses the `py`
-  launcher automatically when available.
-- **Dashboard shows data as unavailable** - the API is not reachable on port 8000.
-- **Reset everything** - `scripts\setup.ps1 -Force` regenerates the dataset + model.
+- **`/ready` is false / `/predict` returns 503** — no active model; upload and activate a
+  bundle.
+- **`Python 3.11+ is required`** — install Python 3.11+; `setup.ps1` uses the `py` launcher
+  automatically when available.
+- **Dashboard shows data as unavailable** — the API is not reachable on port 8000.
+- **Upload rejected (422)** — the file is not a valid bundle: it must be a `.zip` containing
+  at least `model.pkl` and `reference.csv`.

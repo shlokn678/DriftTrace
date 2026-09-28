@@ -4,6 +4,25 @@
 flow, ML lifecycle, monitoring / drift / RCA flows, and deployment architecture. Tags from
 `requirements.md` apply (`[PITCH]`, `[DERIVED]`, `[DECISION]`, `[STRETCH]`, `[FUTURE]`).
 
+> ## SUPERSESSION NOTE (Phase 5 — final model-agnostic overhaul)
+>
+> The current architecture is **model-agnostic**; the loan-default application is removed.
+> Where sections below conflict, the current design (see `docs/architecture.md` and
+> `assumptions-and-decisions.md` D-52..D-56) wins:
+>
+> - Flow: `model bundle (model.pkl + reference.csv + optional graph.json) -> model adapter
+>   -> standardized prediction event -> core -> KS/PSI -> optional dependency graph + RCA ->
+>   incident/report/explanation -> human operator`.
+> - The model adapter layer (`src/drifttrace/adapters/`) is the only model-facing seam;
+>   scikit-learn is the sole implemented adapter (classification, regression, Pipeline). The
+>   core consumes events and never touches model internals.
+> - Each model's reference data defines its feature schema and drift baseline (`bundle/`).
+>   The dependency graph is optional (`graph.json`), never learned. No `config/graph.yaml` or
+>   `config/schema.yaml`; loan feature names are gone.
+> - No built-in model; no Docker; broker-free by default (Redpanda optional). The loan
+>   generator/transform/training pipeline and the Airflow DAG were removed; the generic
+>   drift/graph/RCA/streaming/serving/governance components are preserved.
+
 ## 1. Architectural principles
 
 1. **Pitch terminology is preserved.** Nodes are `income`, `credit_score`, `risk_score`,

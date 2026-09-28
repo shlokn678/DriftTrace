@@ -1,6 +1,6 @@
-# DriftTrace CI (FR-16). Runs on push and pull request.
-# Broker-free, Airflow-free, and credential-free (FR-16.2, FR-16.4, NFR-7):
-# no Redpanda/Kafka, no Airflow, no cloud accounts, no secrets are referenced.
+# DriftTrace CI. Runs on push and pull request.
+# Broker-free, Docker-free, and credential-free: no Redpanda/Kafka, no Docker,
+# no cloud accounts, no secrets are referenced.
 name: CI
 
 on:
@@ -33,14 +33,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install package with dev + tracking + serving + streaming + explain extras
-        # Core + dev tooling + MLflow + FastAPI/httpx (serving tests) + confluent-kafka
-        # (streaming adapter import tests) + SHAP/LIME (explainability tests). No Airflow,
-        # no running broker, no cloud dependencies. Tests never connect to a real broker
-        # (FR-16.2, NFR-8).
+      - name: Install package with dev + serving + streaming + explain extras
+        # Core + dev tooling + FastAPI/httpx (serving tests) + confluent-kafka (streaming
+        # adapter import tests) + SHAP/LIME (explainability). No Docker, no running broker,
+        # no cloud dependencies. Tests never connect to a real broker (NFR-8).
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,tracking,serving,streaming,explain]"
+          python -m pip install -e ".[dev,serving,streaming,explain]"
 
       - name: Lint (ruff)
         run: python -m ruff check src tests
@@ -51,23 +50,16 @@ jobs:
       - name: Type check (mypy)
         run: python -m mypy
 
-      - name: Unit + schema tests
-        # The full suite is broker-free and Airflow-free (NFR-8). No Docker.
-        # Schema validation tests are part of tests/unit (FR-2, FR-16.1).
-        env:
-          MLFLOW_DISABLE_AGENT_HINT: "1"
+      - name: Unit + integration tests
+        # The full suite is broker-free and Docker-free (NFR-8).
         run: python -m pytest -p no:cacheprovider -q
-
-      - name: Schema tests (explicit, FR-16.1)
-        # Run the schema/validation tests on their own so a schema regression is a
-        # clearly named CI failure, as required by FR-2.1 / FR-16.1.
-        run: python -m pytest tests/unit/test_schema_validate.py -q
 
   bootstrap:
     name: Fresh-clone bootstrap + API smoke test
     runs-on: ubuntu-latest
-    # Local-first: no Docker, no broker, no cloud, no secrets. Reconstructs runtime
-    # state from tracked files with the deterministic pipeline, then exercises the API.
+    # Local-first: no Docker, no broker, no cloud, no secrets. Prepares runtime dirs
+    # (no built-in model), then exercises the bundle upload -> activate -> predict ->
+    # drift-test workflow with models built on the fly.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -78,13 +70,13 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install package (serving + tracking extras)
+      - name: Install package (serving extras)
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[tracking,serving,streaming]"
+          python -m pip install -e ".[serving]"
 
-      - name: Bootstrap runtime state (dataset + baseline + trained/registered model)
+      - name: Bootstrap runtime directories (no model is created)
         run: python -m drifttrace.bootstrap
 
-      - name: API smoke test (health / ready / predict / income_annual drift / RCA)
+      - name: API smoke test (upload -> activate -> predict -> drift test -> RCA)
         run: python scripts/smoke_api.py
