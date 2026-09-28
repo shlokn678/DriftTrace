@@ -150,9 +150,7 @@ class SklearnAdapter(ModelAdapter):
 
         if self._task == "regression":
             value = float(self._model.predict(x)[0])
-            return PredictionResult(
-                prediction=None, probability=None, features=used, output=value
-            )
+            return PredictionResult(prediction=None, probability=None, features=used, output=value)
 
         # Classification (or unknown-but-has-predict).
         probability: float | None = None

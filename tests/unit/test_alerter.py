@@ -32,14 +32,14 @@ def _rca_one_root() -> RCAResult:
         has_root_cause=True,
         root_cause_candidates=[
             RootCauseCandidate(
-                node="income",
+                node="feature_a",
                 severity=0.9,
-                symptom_path=["credit_score", "risk_score"],
+                symptom_path=["feature_b", "feature_c"],
                 evidence={},
             )
         ],
-        symptoms=["credit_score", "risk_score"],
-        drifted_nodes=["income", "credit_score", "risk_score"],
+        symptoms=["feature_b", "feature_c"],
+        drifted_nodes=["feature_a", "feature_b", "feature_c"],
     )
 
 
@@ -49,7 +49,7 @@ def test_exactly_one_alert_for_causal_chain() -> None:
     alerter = Alerter(webhook=wh, cooldown_seconds=0, now_fn=lambda: 1000.0)
     alerts = alerter.process(_rca_one_root())
     assert len(alerts) == 1
-    assert alerts[0].root_cause == "income"
+    assert alerts[0].root_cause == "feature_a"
     # No separate alerts for the symptoms.
     assert len(wh.sent) == 1
     assert wh.sent[0]["type"] == "root_cause_alert"
@@ -88,7 +88,7 @@ def test_alert_persisted_locally(tmp_path) -> None:
     lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
     assert len(lines) == 1
     rec = json.loads(lines[0])
-    assert rec["root_cause"] == "income"
+    assert rec["root_cause"] == "feature_a"
     assert rec["incident_id"].startswith("inc-")
 
 

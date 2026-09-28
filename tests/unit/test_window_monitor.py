@@ -13,11 +13,11 @@ from drifttrace.streaming.window import (
 )
 
 
-def _events(n: int, income: float = 1000.0, source: str = "test") -> list[PredictionEvent]:
+def _events(n: int, value: float = 1000.0, source: str = "test") -> list[PredictionEvent]:
     return [
         PredictionEvent(
             event_id=f"e{i}",
-            features={"income": income, "credit_score": 600.0, "risk_score": 0.3},
+            features={"feature_a": value, "feature_b": 600.0, "feature_c": 0.3},
             prediction=0,
             probability=0.3,
             source=source,
@@ -61,8 +61,8 @@ def test_window_insufficient_flag() -> None:
 
 @pytest.mark.unit
 def test_window_feature_means_reflect_input() -> None:
-    windows = windows_from_events(_events(4, income=2000.0), WindowPolicy(size=4, min_samples=1))
-    assert windows[0].feature_means["income"] == pytest.approx(2000.0)
+    windows = windows_from_events(_events(4, value=2000.0), WindowPolicy(size=4, min_samples=1))
+    assert windows[0].feature_means["feature_a"] == pytest.approx(2000.0)
 
 
 @pytest.mark.unit

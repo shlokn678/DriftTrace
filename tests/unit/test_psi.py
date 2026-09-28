@@ -14,7 +14,7 @@ def test_psi_stable() -> None:
     rng = np.random.default_rng(0)
     base = rng.normal(0, 1, 2000)
     cur = rng.normal(0, 1, 2000)
-    res = psi_continuous("income", cur, base, window_id="w", baseline_version="1")
+    res = psi_continuous("feature_a", cur, base, window_id="w", baseline_version="1")
     assert res.psi is not None and res.psi < 0.1
     assert res.verdict == str(Verdict.STABLE)
 
@@ -24,7 +24,7 @@ def test_psi_drift() -> None:
     rng = np.random.default_rng(1)
     base = rng.normal(0, 1, 2000)
     cur = rng.normal(3, 1, 2000)  # large shift -> PSI large
-    res = psi_continuous("income", cur, base, window_id="w", baseline_version="1")
+    res = psi_continuous("feature_a", cur, base, window_id="w", baseline_version="1")
     assert res.psi is not None and res.psi >= 0.2
     assert res.verdict == str(Verdict.DRIFT)
 
@@ -98,7 +98,7 @@ def test_psi_categorical_stable_and_drift() -> None:
 def test_psi_evidence_fields() -> None:
     rng = np.random.default_rng(4)
     res = psi_continuous(
-        "risk_score", rng.random(200), rng.random(200), window_id="w1", baseline_version="2"
+        "feature_c", rng.random(200), rng.random(200), window_id="w1", baseline_version="2"
     )
     d = res.to_dict()
     for key in [

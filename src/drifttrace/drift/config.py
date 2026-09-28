@@ -47,9 +47,16 @@ class DriftConfig:
 
 
 def load_drift_config(path: Path | None = None) -> DriftConfig:
-    """Load :class:`DriftConfig` from ``config/drift.yaml`` (or an explicit path)."""
+    """Load :class:`DriftConfig` from ``config/drift.yaml`` (or an explicit path).
+
+    Every field has a sensible default, so a missing file yields the default config
+    rather than an error (the thresholds are not domain-specific).
+    """
     cfg_path = path or get_paths().drift_yaml
-    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    if not cfg_path.exists():
+        raw: dict = {}
+    else:
+        raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
     thr = raw.get("thresholds", {}) or {}
     det = raw.get("detection", {}) or {}
     alerting = raw.get("alerting", {}) or {}

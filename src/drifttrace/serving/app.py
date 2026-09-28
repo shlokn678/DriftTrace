@@ -225,7 +225,7 @@ def create_app(settings: ServingSettings | None = None) -> Any:
 
         from drifttrace.explain.explainer import lime_explain_local, shap_explain_local
 
-        features = {k: v for k, v in req.features.items()}
+        features = dict(req.features)
         background = ctx.reference_frame
         try:
             if req.method == "lime":
@@ -356,11 +356,11 @@ def create_app(settings: ServingSettings | None = None) -> Any:
 
 def _clear_latest_report(settings: ServingSettings) -> None:
     """Remove the persisted latest RCA report so a new active model starts clean."""
+    import contextlib
+
     latest = settings.reports_dir_path / "latest_rca.json"
-    try:
+    with contextlib.suppress(OSError):
         latest.unlink(missing_ok=True)
-    except OSError:
-        pass
 
 
 def run_drift_test(
@@ -395,9 +395,7 @@ def run_drift_test(
 
     # Determine numeric features to perturb.
     numeric = [
-        f
-        for f in feature_names
-        if f in sample.columns and pd.api.types.is_numeric_dtype(sample[f])
+        f for f in feature_names if f in sample.columns and pd.api.types.is_numeric_dtype(sample[f])
     ]
     targets = [feature] if feature and feature in numeric else numeric
     if intensity > 0 and targets:

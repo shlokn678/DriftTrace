@@ -67,7 +67,7 @@ def load_bundle_dir(directory: Path) -> LoadedBundle:
     Raises :class:`BundleError` if ``model`` or ``reference.csv`` is missing.
     """
     # If the archive extracted into a single subdirectory, descend into it.
-    entries = [p for p in directory.iterdir()] if directory.is_dir() else []
+    entries = list(directory.iterdir()) if directory.is_dir() else []
     subdirs = [p for p in entries if p.is_dir()]
     files = [p for p in entries if p.is_file()]
     if not files and len(subdirs) == 1:

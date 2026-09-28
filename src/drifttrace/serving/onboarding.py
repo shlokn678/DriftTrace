@@ -23,7 +23,7 @@ import pandas as pd
 from drifttrace.adapters.base import ModelAdapter
 from drifttrace.adapters.registry import build_adapter, inspect_model, load_model_object
 from drifttrace.bundle.graph_json import GraphParseError, load_graph_json
-from drifttrace.bundle.loader import BundleError, extract_bundle_zip, load_bundle_dir
+from drifttrace.bundle.loader import extract_bundle_zip, load_bundle_dir
 from drifttrace.bundle.reference import (
     OUTPUT_NODE,
     ReferenceError,
@@ -131,7 +131,7 @@ class OnboardingRegistry:
 
         # If a graph was provided, validate it now so problems surface at onboarding.
         graph_message: str | None = None
-        if graph_available:
+        if graph_available and loaded_graph is not None:
             try:
                 load_graph_json(loaded_graph, feature_names=profile.feature_names)
             except GraphParseError as exc:

@@ -14,7 +14,7 @@ def test_ks_stable_same_distribution() -> None:
     rng = np.random.default_rng(0)
     base = rng.normal(0, 1, 500)
     cur = rng.normal(0, 1, 500)
-    res = ks_test("income", cur, base, window_id="w0", baseline_version="1", threshold=0.05)
+    res = ks_test("feature_a", cur, base, window_id="w0", baseline_version="1", threshold=0.05)
     assert res.verdict == str(Verdict.STABLE)
     assert res.p_value is not None and res.p_value >= 0.05
     assert res.statistic is not None
@@ -25,7 +25,7 @@ def test_ks_obvious_drift() -> None:
     rng = np.random.default_rng(1)
     base = rng.normal(0, 1, 500)
     cur = rng.normal(5, 1, 500)  # shifted far
-    res = ks_test("income", cur, base, window_id="w0", baseline_version="1", threshold=0.05)
+    res = ks_test("feature_a", cur, base, window_id="w0", baseline_version="1", threshold=0.05)
     assert res.verdict == str(Verdict.DRIFT)
     assert res.p_value is not None and res.p_value < 0.05
 
@@ -33,7 +33,7 @@ def test_ks_obvious_drift() -> None:
 @pytest.mark.unit
 def test_ks_insufficient_samples() -> None:
     res = ks_test(
-        "income",
+        "feature_a",
         [1.0, 2.0],
         list(range(100)),
         window_id="w0",
@@ -49,7 +49,7 @@ def test_ks_insufficient_samples() -> None:
 def test_ks_evidence_fields() -> None:
     rng = np.random.default_rng(2)
     res = ks_test(
-        "credit_score",
+        "feature_b",
         rng.normal(0, 1, 100),
         rng.normal(0, 1, 100),
         window_id="w7",
@@ -69,7 +69,7 @@ def test_ks_evidence_fields() -> None:
         "verdict",
     ]:
         assert key in d
-    assert d["node"] == "credit_score"
+    assert d["node"] == "feature_b"
     assert d["window_id"] == "w7"
     assert d["baseline_version"] == "3"
 

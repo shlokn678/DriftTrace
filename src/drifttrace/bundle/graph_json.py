@@ -124,9 +124,7 @@ def _graph_from_nodes(nodes_spec: dict[str, Any]) -> DependencyGraph:
             for p in s.parents:
                 children.setdefault(p, []).append(s.name)
         leaves = [n for n in names if not children.get(n)]
-        specs.append(
-            NodeSpec(name=OUTPUT_NODE, kind="model_output", parents=tuple(sorted(leaves)))
-        )
+        specs.append(NodeSpec(name=OUTPUT_NODE, kind="model_output", parents=tuple(sorted(leaves))))
     try:
         return DependencyGraph(specs)
     except GraphValidationError as exc:

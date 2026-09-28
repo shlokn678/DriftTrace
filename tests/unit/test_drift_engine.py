@@ -19,8 +19,8 @@ def _config() -> DriftConfig:
 def _baseline(seed: int = 0) -> Baseline:
     rng = np.random.default_rng(seed)
     b = Baseline(model_version="1")
-    b.nodes["income"] = NodeBaseline(
-        node="income",
+    b.nodes["feature_a"] = NodeBaseline(
+        node="feature_a",
         kind="continuous",
         values=list(rng.normal(1000, 100, 1000)),
         count=1000,
@@ -32,9 +32,9 @@ def _baseline(seed: int = 0) -> Baseline:
 def test_engine_stable() -> None:
     rng = np.random.default_rng(1)
     baseline = _baseline()
-    values = {"income": list(rng.normal(1000, 100, 500))}
+    values = {"feature_a": list(rng.normal(1000, 100, 500))}
     report = detect_drift(values, {}, baseline, _config(), window_id="w0")
-    assert report.nodes["income"].verdict == str(Verdict.STABLE)
+    assert report.nodes["feature_a"].verdict == str(Verdict.STABLE)
     assert report.drifted_nodes == []
 
 
@@ -42,27 +42,27 @@ def test_engine_stable() -> None:
 def test_engine_drift() -> None:
     rng = np.random.default_rng(2)
     baseline = _baseline()
-    values = {"income": list(rng.normal(5000, 100, 500))}  # big shift
+    values = {"feature_a": list(rng.normal(5000, 100, 500))}  # big shift
     report = detect_drift(values, {}, baseline, _config(), window_id="w0")
-    assert report.nodes["income"].verdict == str(Verdict.DRIFT)
-    assert "income" in report.drifted_nodes
+    assert report.nodes["feature_a"].verdict == str(Verdict.DRIFT)
+    assert "feature_a" in report.drifted_nodes
 
 
 @pytest.mark.unit
 def test_engine_insufficient() -> None:
     baseline = _baseline()
-    values = {"income": [1000.0, 1001.0]}  # below min_samples
+    values = {"feature_a": [1000.0, 1001.0]}  # below min_samples
     report = detect_drift(values, {}, baseline, _config(), window_id="w0")
-    assert report.nodes["income"].verdict == str(Verdict.INSUFFICIENT_DATA)
+    assert report.nodes["feature_a"].verdict == str(Verdict.INSUFFICIENT_DATA)
 
 
 @pytest.mark.unit
 def test_engine_retains_ks_and_psi_evidence() -> None:
     rng = np.random.default_rng(3)
     baseline = _baseline()
-    values = {"income": list(rng.normal(1000, 100, 200))}
+    values = {"feature_a": list(rng.normal(1000, 100, 200))}
     report = detect_drift(values, {}, baseline, _config(), window_id="w0")
-    node = report.nodes["income"]
+    node = report.nodes["feature_a"]
     assert node.ks is not None
     assert node.psi is not None
     assert "statistic" in node.ks
@@ -73,9 +73,9 @@ def test_engine_retains_ks_and_psi_evidence() -> None:
 def test_engine_from_frame() -> None:
     rng = np.random.default_rng(4)
     baseline = _baseline()
-    frame = pd.DataFrame({"income": rng.normal(1000, 100, 300)})
+    frame = pd.DataFrame({"feature_a": rng.normal(1000, 100, 300)})
     report = drift_report_from_frame(frame, baseline, _config(), window_id="w0")
-    assert "income" in report.nodes
+    assert "feature_a" in report.nodes
 
 
 @pytest.mark.unit
@@ -84,6 +84,6 @@ def test_engine_serializable() -> None:
 
     rng = np.random.default_rng(5)
     baseline = _baseline()
-    values = {"income": list(rng.normal(1000, 100, 100))}
+    values = {"feature_a": list(rng.normal(1000, 100, 100))}
     report = detect_drift(values, {}, baseline, _config(), window_id="w0")
     json.dumps(report.to_dict())  # must not raise

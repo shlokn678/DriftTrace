@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Union
-
 from pydantic import BaseModel, Field
 
 # A single feature value may be numeric (continuous) or a string label (categorical).
-FeatureValue = Union[float, int, str]
+FeatureValue = float | int | str
 
 
 class PredictRequest(BaseModel):

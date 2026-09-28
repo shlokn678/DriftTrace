@@ -34,10 +34,11 @@ def test_retrain_requires_approval() -> None:
 
 
 @pytest.mark.unit
-def test_retrain_with_approval_audits_without_running_pipeline(tmp_path) -> None:
+def test_retrain_with_approval_audits_only(tmp_path) -> None:
     audit = tmp_path / "audit.jsonl"
-    # run_pipeline=False keeps the unit test fast + deterministic (no MLflow).
-    result = retrain(approved=True, approver="bob", audit_path=audit, run_pipeline=False)
+    # Retrain records the approved decision but performs no training (models are
+    # uploaded, not trained by DriftTrace).
+    result = retrain(approved=True, approver="bob", audit_path=audit)
     assert result.ok
     entries = read_audit(audit)
     assert len(entries) == 1

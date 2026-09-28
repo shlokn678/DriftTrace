@@ -11,7 +11,7 @@ from drifttrace.streaming.event import SCHEMA_VERSION, PredictionEvent, new_even
 def test_event_has_required_fields() -> None:
     ev = PredictionEvent(
         model_version="1",
-        features={"income": 1000.0, "credit_score": 600.0, "risk_score": 0.3},
+        features={"feature_a": 1000.0, "feature_b": 600.0, "feature_c": 0.3},
         prediction=0,
         probability=0.3,
     )
@@ -19,7 +19,7 @@ def test_event_has_required_fields() -> None:
     assert ev.event_id
     assert ev.model_version == "1"
     assert ev.timestamp  # ISO-8601 default
-    assert set(ev.features) == {"income", "credit_score", "risk_score"}
+    assert set(ev.features) == {"feature_a", "feature_b", "feature_c"}
     assert ev.prediction == 0
     assert ev.source == "api"
 

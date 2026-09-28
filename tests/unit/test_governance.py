@@ -10,16 +10,18 @@ from drifttrace.governance.privacy import check_payload, check_records
 
 
 @pytest.mark.unit
-def test_governance_config_declares_sensitive_attribute() -> None:
+def test_governance_config_sensitive_attribute_declared_not_inferred() -> None:
     cfg = load_governance_config()
-    assert cfg.sensitive_attribute == "group"  # declared, not inferred
+    # No sensitive attribute is declared by default (never inferred); fairness is then
+    # unavailable rather than fabricated.
+    assert cfg.sensitive_attribute is None
     assert "email" in cfg.pii_deny_list
 
 
 @pytest.mark.unit
 def test_privacy_passes_clean_payload() -> None:
     cfg = load_governance_config()
-    payload = {"income": 1000.0, "credit_score": 600.0, "prediction": 1}
+    payload = {"feature_a": 1000.0, "feature_b": 600.0, "prediction": 1}
     result = check_payload(payload, cfg)
     assert result.passed
     assert result.violations == []
@@ -28,7 +30,7 @@ def test_privacy_passes_clean_payload() -> None:
 @pytest.mark.unit
 def test_privacy_flags_pii_field() -> None:
     cfg = load_governance_config()
-    payload = {"income": 1000.0, "email": "x@example.com", "ssn": "000"}
+    payload = {"feature_a": 1000.0, "email": "x@example.com", "ssn": "000"}
     result = check_payload(payload, cfg)
     assert not result.passed
     assert "email" in result.violations
@@ -48,8 +50,8 @@ def test_privacy_checks_nested_and_lists() -> None:
 def test_privacy_check_records() -> None:
     cfg = load_governance_config()
     records = [
-        {"income": 1.0, "prediction": 0},
-        {"income": 2.0, "customer_id": "abc"},  # PII
+        {"feature_a": 1.0, "prediction": 0},
+        {"feature_a": 2.0, "customer_id": "abc"},  # PII
     ]
     result = check_records(records, cfg)
     assert not result.passed
