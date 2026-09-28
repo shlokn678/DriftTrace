@@ -5,13 +5,15 @@ import { formatNumber } from "../lib/status";
 
 interface Props {
   report: MonitoringReport | null;
+  dependenciesAvailable?: boolean;
 }
 
 /** The primary RCA section: dependency graph + root-cause reasoning/evidence. */
-export function RcaSection({ report }: Props) {
+export function RcaSection({ report, dependenciesAvailable = true }: Props) {
   const rca = report?.rca ?? null;
   const roots = rca?.root_cause_candidates ?? [];
   const primary = roots[0];
+  const drifted = report?.drift.drifted_nodes ?? [];
 
   return (
     <section className="section bento" id="rca" aria-labelledby="rca-title">
@@ -23,7 +25,10 @@ export function RcaSection({ report }: Props) {
         <h2 id="rca-title" style={{ marginBottom: "var(--space-5)" }}>
           Trace upstream
         </h2>
-        <DependencyGraph classifications={report?.classifications ?? null} />
+        <DependencyGraph
+          classifications={report?.classifications ?? null}
+          dependenciesAvailable={dependenciesAvailable}
+        />
       </BentoCard>
 
       <BentoCard className="col-7" major>
@@ -43,14 +48,29 @@ export function RcaSection({ report }: Props) {
         {!report ? (
           <EmptyState
             title="No monitoring window yet"
-            hint="Run a scenario from the operator controls to populate the latest RCA from the real KS/PSI + graph analysis."
+            hint="Send predictions or run a drift test to populate the latest RCA from the real KS/PSI + graph analysis."
           />
         ) : !rca?.has_root_cause ? (
           <div className="stack stack-4">
             <p className="muted">
-              The latest monitoring window shows no node with a DRIFT verdict that lacks a
-              drifted ancestor. No root-cause alert was emitted.
+              {!dependenciesAvailable && drifted.length > 0
+                ? "Drift was detected, but no dependency graph was provided for this model, so dependency-based root-cause tracing is unavailable. The affected features are listed below."
+                : drifted.length > 0
+                  ? "The latest window shows no drifted feature without a drifted ancestor, so no single root cause was isolated."
+                  : "The latest monitoring window shows no drift. No root-cause alert was emitted."}
             </p>
+            {drifted.length > 0 && (
+              <div className="stack stack-2">
+                <MonoLabel>Affected features</MonoLabel>
+                <div className="row row-3 wrap">
+                  {drifted.map((n) => (
+                    <span key={n} className="mono-value" style={symptomChip}>
+                      {n}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             <RcaMeta report={report} />
           </div>
         ) : (
@@ -93,26 +113,26 @@ export function RcaSection({ report }: Props) {
 }
 
 function RcaMeta({ report }: { report: MonitoringReport }) {
-  const incomeKs = report.drift.nodes.income?.ks;
-  const incomePsi = report.drift.nodes.income?.psi;
+  // Evidence for the primary root cause, else the first drifted node - fully dynamic.
+  const primaryNode =
+    report.rca.root_cause_candidates?.[0]?.node ?? report.drift.drifted_nodes?.[0] ?? null;
+  const node = primaryNode ? report.drift.nodes[primaryNode] : undefined;
+  const ks = node?.ks;
+  const psi = node?.psi;
   return (
     <>
       <hr className="divider" />
       <div className="bento" style={{ gap: "var(--space-4)" }}>
         <Meta label="Monitoring window" value={report.window_id} col="col-3" />
-        <Meta label="Model version" value={`v${report.model_version}`} col="col-3" />
-        <Meta label="Baseline" value={`v${report.baseline_version}`} col="col-3" />
-        <Meta
-          label="Incident"
-          value={report.incident_id ?? "-"}
-          col="col-3"
-        />
+        <Meta label="Model" value={report.model_version} col="col-3" />
+        <Meta label="Baseline" value={report.baseline_version} col="col-3" />
+        <Meta label="Incident" value={report.incident_id ?? "-"} col="col-3" />
       </div>
-      {incomeKs && incomePsi && (
+      {primaryNode && ks && psi && (
         <p className="tertiary" style={{ fontSize: "0.82rem" }}>
-          Evidence (income): KS p-value {formatNumber(incomeKs.p_value)} vs threshold{" "}
-          {formatNumber(incomeKs.threshold, 2)}; PSI {formatNumber(incomePsi.psi)} vs drift
-          threshold {formatNumber(incomePsi.psi_drift, 2)}.
+          Evidence ({primaryNode}): KS p-value {formatNumber(ks.p_value)} vs threshold{" "}
+          {formatNumber(ks.threshold, 2)}; PSI {formatNumber(psi.psi)} vs drift threshold{" "}
+          {formatNumber(psi.psi_drift, 2)}.
         </p>
       )}
     </>

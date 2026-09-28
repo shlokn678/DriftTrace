@@ -81,16 +81,19 @@ class Phase4Processor:
     def process(self, window: Window) -> ProcessingOutcome:
         window_id = f"w{window.index}"
 
-        # Collect per-node values from the window's events.
+        # Collect per-node values from the window's events. Numeric feature values feed
+        # the continuous KS/PSI path; string values feed the categorical PSI path.
         values: dict[str, list[float]] = {n: [] for n in self._continuous}
         cats: dict[str, list[str]] = {n: [] for n in self._categorical}
         for ev in window.events:
             for node in self._continuous:
                 v = ev.features.get(node)
-                if v is not None:
+                if v is not None and not isinstance(v, str):
                     values[node].append(float(v))
-            # Categorical features are not part of the prediction event schema in the
-            # MVP; categorical nodes therefore report INSUFFICIENT_DATA unless present.
+            for node in self._categorical:
+                v = ev.features.get(node)
+                if v is not None:
+                    cats[node].append(str(v))
 
         drift = detect_drift(values, cats, self.baseline, self.config, window_id=window_id)
         rca = analyze(drift, self.graph)

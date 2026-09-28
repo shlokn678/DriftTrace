@@ -42,14 +42,6 @@ class Paths:
     model_store: Path
 
     @property
-    def graph_yaml(self) -> Path:
-        return self.config / "graph.yaml"
-
-    @property
-    def schema_yaml(self) -> Path:
-        return self.config / "schema.yaml"
-
-    @property
     def drift_yaml(self) -> Path:
         return self.config / "drift.yaml"
 

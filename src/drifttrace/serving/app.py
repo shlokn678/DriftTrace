@@ -1,36 +1,36 @@
-"""FastAPI prediction service (FR-7).
+"""FastAPI prediction + monitoring service (model-agnostic).
 
-Endpoints (FR-7.5): ``GET /health``, ``GET /ready``, ``POST /predict``,
-``GET /model-info``. (``/explain`` and ``/rca/latest`` are Phase 4 and intentionally
-not implemented here.)
+The service serves whichever model the operator has uploaded and activated. There is no
+built-in or default model: a fresh install starts with NO active model and reports
+non-ready until a bundle is activated.
 
-Behaviour:
-- Loads a specific registered model version via the existing MLflow registry
-  conventions (FR-7.3); does not change the training/MLflow lifecycle.
-- Recomputes features with the shared transform so serving matches training (FR-3.3).
-- Logs every request (features, prediction, model version, timestamp) (FR-7.4).
-- Emits a :class:`PredictionEvent` after each successful prediction, fire-and-forget,
-  so prediction latency never depends on the monitor (FR-7.2, NFR-2).
+Flow:
+- Upload a bundle (model.pkl + reference.csv + optional graph.json) -> inspect.
+- Activate it ("use this model") -> it becomes the active model.
+- ``POST /predict`` serves the active model with a generic feature-vector payload and
+  emits a standardized prediction event (fire-and-forget), which feeds monitoring.
+- Drift is measured against the active model's reference baseline; RCA uses its optional
+  dependency graph.
 
-Configuration is environment-driven (NFR-4/NFR-7); see ``serving/config.py``. The API
-is unauthenticated and intended for localhost / the internal Compose network (FR-7.6).
+Configuration is environment-driven (NFR-4/NFR-7); see ``serving/config.py``. The API is
+unauthenticated and intended for localhost / internal use only.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 import pandas as pd
 from fastapi import File, UploadFile
 
-from drifttrace.adapters.base import ModelAdapter, to_standard_event
-from drifttrace.features.transform import MODEL_FEATURES, TransformParams, transform
+from drifttrace.adapters.base import to_standard_event
 from drifttrace.serving.config import ServingSettings, get_serving_settings
 from drifttrace.serving.metrics import METRICS
+from drifttrace.serving.onboarding import REGISTRY, ActiveContext
 from drifttrace.serving.schemas import (
     ActiveModelResponse,
+    DriftTestRequest,
     ExplainRequest,
     HealthResponse,
     ModelInfoResponse,
@@ -38,93 +38,20 @@ from drifttrace.serving.schemas import (
     PredictRequest,
     PredictResponse,
     ReadyResponse,
-    RunScenarioRequest,
     UploadModelResponse,
 )
 from drifttrace.streaming.source import EventSink
-from drifttrace.training.registry import REGISTERED_MODEL_NAME
 
 logger = logging.getLogger("drifttrace.serving")
 
 
-class ModelHolder:
-    """Holds the loaded model behind a model-agnostic adapter (Phase 5).
-
-    The serving core interacts with ``self.adapter`` (a ModelAdapter), never with a
-    framework-specific object. Loading is lazy and tolerant: if no model is registered
-    yet, the service still starts and reports non-ready (FR-7 AC-2) instead of crashing.
-
-    ``model``/``transform_params``/``model_version`` remain available as compatibility
-    accessors for the explainer, which still consumes the raw sklearn estimator.
-    """
-
-    def __init__(self, settings: ServingSettings) -> None:
-        self.settings = settings
-        # Default model: the trained loan model loaded from MLflow. This is the fallback
-        # whenever no custom model is active.
-        self.default_adapter: ModelAdapter | None = None
-        self.default_model_version: str | None = None
-        # Active custom model (set via the onboarding "Use this model" flow). When None,
-        # the default model serves.
-        self.active_adapter: ModelAdapter | None = None
-
-    @property
-    def adapter(self) -> ModelAdapter | None:
-        """The adapter that serves predictions: the active model, else the default."""
-        return self.active_adapter or self.default_adapter
-
-    @property
-    def ready(self) -> bool:
-        return self.adapter is not None
-
-    @property
-    def active(self) -> bool:
-        """True when a custom (onboarded) model is currently serving."""
-        return self.active_adapter is not None
-
-    @property
-    def model_version(self) -> str | None:
-        """The serving model version: active model's, else the default model's."""
-        if self.active_adapter is not None:
-            return self.active_adapter.metadata().model_version
-        return self.default_model_version
-
-    @property
-    def model(self) -> Any:
-        """The underlying estimator, if the serving adapter exposes one (sklearn)."""
-        return getattr(self.adapter, "raw_model", None)
-
-    @property
-    def transform_params(self) -> TransformParams | None:
-        """The feature-transform params, if the serving adapter exposes them (sklearn)."""
-        return getattr(self.adapter, "transform_params", None)
-
-    def load(self) -> None:
-        """Load the configured (or latest) registered model version behind an adapter."""
-        from drifttrace.adapters.registry import build_adapter
-        from drifttrace.training.registry import latest_model_version, load_model
-
-        uri = self.settings.mlflow_tracking_uri
-        version = self.settings.model_version or latest_model_version(tracking_uri=uri)
-        if version is None:
-            logger.warning("no registered model version available; service not ready")
-            return
-        estimator = load_model(version, tracking_uri=uri)
-        params = self.settings.load_transform_params()
-        self.default_model_version = str(version)
-        # Wrap the loaded estimator in the model-agnostic adapter.
-        self.default_adapter = build_adapter(estimator, params, model_version=str(version))
-        logger.info(
-            "loaded default model version %s via sklearn adapter", self.default_model_version
-        )
-
-    def set_active(self, adapter: ModelAdapter | None) -> None:
-        """Set (or clear, with None) the active custom model adapter."""
-        self.active_adapter = adapter
+def _active_ctx() -> ActiveContext | None:
+    """The active model context (adapter + baseline + graph), or None if no active model."""
+    return REGISTRY.active_context()
 
 
 def _make_sink(settings: ServingSettings) -> EventSink:
-    """Build the event sink from settings (Redpanda if configured, else file)."""
+    """Build the event sink from settings (optional Redpanda, else a local file)."""
     if settings.use_redpanda:
         from drifttrace.streaming.source import RedpandaSink
 
@@ -134,51 +61,56 @@ def _make_sink(settings: ServingSettings) -> EventSink:
     return FileSink(settings.event_log_path)
 
 
-def predict_one(
-    holder: ModelHolder,
-    req: PredictRequest,
-    sink: EventSink | None,
-) -> PredictResponse:
-    """Core prediction path: adapter.predict -> log -> emit standardized event.
+def predict_one(ctx: ActiveContext, req: PredictRequest, sink: EventSink | None) -> PredictResponse:
+    """Core prediction path: active adapter -> log -> emit standardized event."""
+    result = ctx.adapter.predict_one(dict(req.features))
 
-    Model-agnostic: it calls the adapter, never a framework-specific object. Extracted
-    from the route so it is unit-testable without an HTTP client.
-    """
-    assert holder.adapter is not None
-    result = holder.adapter.predict_one({"income": req.income})
-    prediction = result.prediction
-    probability = result.probability
-    features = result.features
-
-    # Log the request (FR-7.4) and count it (metrics).
     METRICS.inc("drifttrace_prediction_requests_total")
     logger.info(
-        "prediction request_id=%s model_version=%s prediction=%s probability=%s",
+        "prediction request_id=%s model=%s prediction=%s output=%s",
         req.request_id,
-        holder.model_version,
-        prediction,
-        "n/a" if probability is None else f"{probability:.6f}",
+        ctx.model_id,
+        result.prediction,
+        result.output,
     )
 
-    # Emit a standardized prediction event, fire-and-forget (FR-7.2). Never fail the
-    # request on it. Conversion goes through the single adapter->event boundary.
     event_emitted = False
     if sink is not None:
-        event = to_standard_event(result, holder.adapter.metadata(), request_id=req.request_id)
+        event = to_standard_event(result, ctx.adapter.metadata(), request_id=req.request_id)
         try:
             sink.emit(event)
             event_emitted = True
             METRICS.inc("drifttrace_prediction_events_total")
-        except Exception as exc:  # noqa: BLE001 - emission must not break serving
+        except Exception as exc:  # noqa: BLE001 - emission must never break serving
             logger.warning("event emission failed: %s", exc)
 
     return PredictResponse(
         request_id=req.request_id,
-        model_version=holder.model_version,
-        prediction=prediction,
-        probability=probability if probability is not None else 0.0,
-        features=features,
+        model_version=ctx.adapter.metadata().model_version,
+        prediction=result.prediction,
+        probability=result.probability,
+        output=result.output,
+        features=dict(result.features),
         event_emitted=event_emitted,
+    )
+
+
+def _upload_response(onboarded: Any) -> UploadModelResponse:
+    return UploadModelResponse(
+        model_id=onboarded.model_id if onboarded.supported else None,
+        supported=onboarded.supported,
+        framework=onboarded.framework,
+        name=onboarded.name,
+        task=onboarded.task,
+        n_features=onboarded.n_features,
+        supports_proba=onboarded.supports_proba,
+        features=onboarded.features,
+        reference_available=onboarded.reference_available,
+        dependencies_available=onboarded.dependencies_available,
+        reference_rows=onboarded.reference_rows,
+        missing=onboarded.missing,
+        ready_to_monitor=onboarded.ready_to_monitor,
+        message=onboarded.message,
     )
 
 
@@ -187,7 +119,6 @@ def create_app(settings: ServingSettings | None = None) -> Any:
     from fastapi import FastAPI, HTTPException
 
     settings = settings or get_serving_settings()
-    holder = ModelHolder(settings)
     sink = _make_sink(settings)
 
     from collections.abc import AsyncIterator
@@ -195,113 +126,123 @@ def create_app(settings: ServingSettings | None = None) -> Any:
 
     @asynccontextmanager
     async def lifespan(_app: Any) -> AsyncIterator[None]:
-        # Attempt to load the default model at startup; stay up (non-ready) if none.
-        try:
-            holder.load()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("model load at startup failed: %s", exc)
-        # Re-sync the active custom model (if one was activated in this process) so the
-        # holder and the process-wide onboarding registry agree after a restart.
-        try:
-            from drifttrace.serving.onboarding import REGISTRY
-
-            holder.set_active(REGISTRY.build_active_adapter())
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("active model re-sync failed: %s", exc)
+        # No model is loaded at startup. The operator uploads + activates a bundle.
         yield
 
-    app = FastAPI(title="DriftTrace Prediction API", version="1.0", lifespan=lifespan)
-    app.state.holder = holder
+    app = FastAPI(title="DriftTrace API", version="2.0", lifespan=lifespan)
     app.state.sink = sink
 
-    # CORS for the local operations dashboard (dev + internal Compose network only).
-    # Not a public API (FR-7.6). Allowed origins are configurable via env.
     from fastapi.middleware.cors import CORSMiddleware
 
-    origins = settings.cors_allow_origins
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=origins,
+        allow_origins=settings.cors_allow_origins,
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
+    # ---- health / readiness / model info ---------------------------------------------
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(status="ok")
 
     @app.get("/ready", response_model=ReadyResponse)
     def ready() -> ReadyResponse:
-        if holder.ready:
+        ctx = _active_ctx()
+        if ctx is not None:
             return ReadyResponse(
-                ready=True, model_version=holder.model_version, detail="model loaded"
+                ready=True, model_version=ctx.model_id, detail="active model loaded"
             )
-        return ReadyResponse(ready=False, model_version=None, detail="model not loaded")
+        return ReadyResponse(ready=False, model_version=None, detail="no active model")
 
     @app.get("/model-info", response_model=ModelInfoResponse)
     def model_info() -> ModelInfoResponse:
-        name = REGISTERED_MODEL_NAME
-        if holder.active and holder.active_adapter is not None:
-            name = holder.active_adapter.metadata().name or REGISTERED_MODEL_NAME
+        ctx = _active_ctx()
+        if ctx is None:
+            return ModelInfoResponse(
+                model_version=None, model_name="none", features=[], loaded=False
+            )
+        meta = ctx.adapter.metadata()
         return ModelInfoResponse(
-            model_version=holder.model_version,
-            model_name=name,
-            features=list(MODEL_FEATURES),
-            loaded=holder.ready,
+            model_version=meta.model_version,
+            model_name=meta.name or "model",
+            features=list(ctx.feature_names),
+            loaded=True,
         )
 
+    # ---- prediction ------------------------------------------------------------------
     @app.post("/predict", response_model=PredictResponse)
     def predict(req: PredictRequest) -> PredictResponse:
-        if not holder.ready:
-            # Try a lazy load in case the model was registered after startup.
-            holder.load()
-        if not holder.ready:
-            raise HTTPException(status_code=503, detail="model not loaded")
-        return predict_one(holder, req, sink)
+        ctx = _active_ctx()
+        if ctx is None:
+            raise HTTPException(status_code=503, detail="no active model")
+        try:
+            return predict_one(ctx, req, sink)
+        except Exception as exc:  # noqa: BLE001 - surface adapter errors cleanly
+            from drifttrace.adapters.base import AdapterError
 
+            if isinstance(exc, AdapterError):
+                raise HTTPException(status_code=422, detail=exc.message) from exc
+            raise HTTPException(status_code=422, detail=f"prediction failed: {exc}") from exc
+
+    # ---- monitoring / RCA ------------------------------------------------------------
     @app.get("/rca/latest")
     def rca_latest() -> dict:
-        """Return the latest persisted monitoring/RCA report (FR-7.5, FR-12.1).
-
-        Reads the ``latest_rca.json`` written by the monitor. Returns a not-available
-        status (never an error) when no monitoring cycle has run yet.
-        """
+        """Return the latest persisted monitoring/RCA report, or a not-available status."""
         import json
 
         latest = settings.reports_dir_path / "latest_rca.json"
         if not latest.exists():
             return {"available": False, "detail": "no monitoring report yet"}
-        return {"available": True, "report": json.loads(latest.read_text(encoding="utf-8"))}
+        report = json.loads(latest.read_text(encoding="utf-8"))
+        ctx = _active_ctx()
+        graph_available = ctx is not None and ctx.graph is not None
+        return {"available": True, "report": report, "dependencies_available": graph_available}
 
+    @app.post("/demo/run-drift-test")
+    def run_drift_test_endpoint(req: DriftTestRequest) -> dict:
+        """Run a generic drift test against the active model's reference data.
+
+        Perturbs a sample drawn from the reference distribution and runs it through the
+        SAME drift -> RCA -> report pipeline used for live monitoring. No domain-specific
+        transforms, no fabricated results.
+        """
+        ctx = _active_ctx()
+        if ctx is None:
+            raise HTTPException(status_code=503, detail="no active model")
+        return run_drift_test(
+            settings, ctx, intensity=req.intensity, feature=req.feature, n=req.n, seed=req.seed
+        )
+
+    # ---- explainability --------------------------------------------------------------
     @app.post("/explain")
     def explain(req: ExplainRequest) -> dict:
-        """SHAP (primary) or LIME (secondary) explanation, off the hot path (FR-14)."""
-        if not holder.ready:
-            holder.load()
-        if not holder.ready:
-            raise HTTPException(status_code=503, detail="model not loaded")
+        """SHAP (primary) or LIME (secondary) explanation, off the hot path."""
+        ctx = _active_ctx()
+        if ctx is None:
+            raise HTTPException(status_code=503, detail="no active model")
 
         from drifttrace.explain.explainer import lime_explain_local, shap_explain_local
 
-        # A small deterministic background/training sample derived from the transform.
-        bg = _explain_background(holder)
+        features = {k: v for k, v in req.features.items()}
+        background = ctx.reference_frame
         try:
             if req.method == "lime":
                 exp = lime_explain_local(
-                    holder.model,
-                    req.income,
-                    holder.transform_params,
-                    bg,
-                    model_version=holder.model_version,
+                    ctx.adapter.raw_model,  # type: ignore[attr-defined]
+                    features,  # type: ignore[arg-type]
+                    ctx.feature_names,
+                    background,
+                    model_version=ctx.model_id,
                 )
             else:
                 exp = shap_explain_local(
-                    holder.model,
-                    req.income,
-                    holder.transform_params,
-                    model_version=holder.model_version,
-                    background=bg,
+                    ctx.adapter.raw_model,  # type: ignore[attr-defined]
+                    features,  # type: ignore[arg-type]
+                    ctx.feature_names,
+                    model_version=ctx.model_id,
+                    background=background,
                 )
         except Exception as exc:  # noqa: BLE001 - explainability must not 500 the API
             raise HTTPException(status_code=500, detail=f"explanation failed: {exc}") from exc
@@ -314,139 +255,85 @@ def create_app(settings: ServingSettings | None = None) -> Any:
 
         return PlainTextResponse(METRICS.to_prometheus())
 
-    @app.get("/demo/scenarios")
-    def demo_scenarios() -> dict:
-        """List the deterministic drift-injection scenarios (FR-18)."""
-        from drifttrace.streaming.demo import SCENARIOS
-
-        return {"scenarios": list(SCENARIOS)}
-
-    @app.post("/demo/run-scenario")
-    def demo_run_scenario(req: RunScenarioRequest) -> dict:
-        """Run a deterministic scenario through the REAL Phase 4 pipeline (FR-18, FR-9/10/11).
-
-        This is a thin HTTP wrapper over the exact same drift -> RCA -> report -> alert
-        pipeline the CLI `replay` uses. It generates deterministic events (values only;
-        the detector decides drift), runs the monitor windower + Phase4Processor, writes
-        the monitoring report + latest_rca.json, and returns the outcome. No fabricated
-        results: KS/PSI and RCA produce the verdicts.
-        """
-        return run_demo_scenario(settings, req.scenario, n=req.n, seed=req.seed)
-
-    # ---- Phase 5: model onboarding ---------------------------------------------------
+    # ---- model onboarding + activation -----------------------------------------------
     @app.post("/models/upload", response_model=UploadModelResponse)
     async def upload_model(file: UploadFile = File(...)) -> UploadModelResponse:  # noqa: B008
-        """Upload one model file; DriftTrace inspects it and reports what it found.
+        """Upload a model bundle (.zip of model.pkl + reference.csv + optional graph.json).
 
-        Minimal input: the model file is the only required upload. Reference data and
-        dependency information are reused from the project context when available and
-        only requested when genuinely missing.
+        Also accepts a bare model file for convenience, but reference data is required to
+        monitor, so a full bundle is recommended.
         """
         import tempfile
         from pathlib import Path as _Path
 
-        from drifttrace.serving.onboarding import REGISTRY
+        from drifttrace.bundle.loader import BundleError
+        from drifttrace.bundle.reference import ReferenceError
 
-        suffix = _Path(file.filename or "model.pkl").suffix or ".pkl"
+        suffix = _Path(file.filename or "bundle.zip").suffix or ".zip"
         contents = await file.read()
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(contents)
             tmp_path = _Path(tmp.name)
         try:
-            onboarded = REGISTRY.onboard(tmp_path, original_name=file.filename)
+            onboarded = REGISTRY.onboard_bundle(tmp_path, original_name=file.filename)
+        except (BundleError, ReferenceError) as exc:
+            raise HTTPException(status_code=422, detail=exc.message) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail=f"could not onboard bundle: {exc}") from exc
         finally:
             tmp_path.unlink(missing_ok=True)
 
-        return UploadModelResponse(
-            model_id=onboarded.model_id if onboarded.supported else None,
-            supported=onboarded.supported,
-            framework=onboarded.framework,
-            name=onboarded.name,
-            task=onboarded.task,
-            n_features=onboarded.n_features,
-            supports_proba=onboarded.supports_proba,
-            features=onboarded.features,
-            reference_available=onboarded.reference_available,
-            dependencies_available=onboarded.dependencies_available,
-            missing=onboarded.missing,
-            ready_to_monitor=onboarded.ready_to_monitor,
-            message=onboarded.message,
-        )
+        return _upload_response(onboarded)
 
     def _active_model_response() -> ActiveModelResponse:
-        """Describe whichever model currently serves predictions."""
-        from drifttrace.serving.onboarding import REGISTRY
-
-        if holder.active and holder.active_adapter is not None:
-            meta = holder.active_adapter.metadata()
-            active = REGISTRY.active()
-            return ActiveModelResponse(
-                is_custom=True,
-                model_id=meta.model_id,
-                name=meta.name or "custom-model",
-                framework=meta.framework,
-                task=meta.task,
-                model_version=meta.model_version,
-                features=active.features if active else list(MODEL_FEATURES),
-                loaded=holder.ready,
-            )
+        ctx = _active_ctx()
+        if ctx is None:
+            return ActiveModelResponse(active=False, loaded=False)
+        meta = ctx.adapter.metadata()
         return ActiveModelResponse(
-            is_custom=False,
-            model_id=None,
-            name=REGISTERED_MODEL_NAME,
-            framework="scikit-learn",
-            task="binary_classification",
-            model_version=holder.model_version,
-            features=list(MODEL_FEATURES),
-            loaded=holder.ready,
+            active=True,
+            model_id=ctx.model_id,
+            name=meta.name,
+            framework=meta.framework,
+            task=meta.task,
+            model_version=meta.model_version,
+            features=list(ctx.feature_names),
+            dependencies_available=ctx.graph is not None,
+            supports_proba=meta.supports_proba,
+            loaded=True,
         )
 
     @app.get("/models/active", response_model=ActiveModelResponse)
     def active_model() -> ActiveModelResponse:
-        """Return the model currently serving predictions (custom or default loan model)."""
+        """Return the model currently serving predictions, or an explicit no-model state."""
         return _active_model_response()
 
     @app.post("/models/{model_id}/activate", response_model=ActiveModelResponse)
     def activate_model(model_id: str) -> ActiveModelResponse:
-        """Activate a supported onboarded model so ``/predict`` serves it ("Use this model").
-
-        The default loan model remains the fallback: activation can be reversed and, if
-        activation fails, the previously serving model is unchanged.
-        """
-        from drifttrace.serving.onboarding import REGISTRY
-
+        """Activate a supported onboarded model ("use this model")."""
         try:
             REGISTRY.activate(model_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="model not found") from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-        try:
-            adapter = REGISTRY.build_active_adapter()
-        except Exception as exc:  # noqa: BLE001 - surface a clean activation error
+        except Exception as exc:  # noqa: BLE001
             REGISTRY.deactivate()
             raise HTTPException(status_code=422, detail=f"could not activate model: {exc}") from exc
-        holder.set_active(adapter)
-        logger.info("activated custom model %s", model_id)
+        # A new active model resets monitoring: clear any stale report from a prior model.
+        _clear_latest_report(settings)
+        logger.info("activated model %s", model_id)
         return _active_model_response()
 
     @app.post("/models/deactivate", response_model=ActiveModelResponse)
     def deactivate_model() -> ActiveModelResponse:
-        """Clear the active custom model and restore the default loan model."""
-        from drifttrace.serving.onboarding import REGISTRY
-
+        """Clear the active model. There is no fallback; monitoring stops."""
         REGISTRY.deactivate()
-        holder.set_active(None)
+        _clear_latest_report(settings)
         return _active_model_response()
 
     @app.get("/models/{model_id}", response_model=ModelStatusResponse)
     def model_status(model_id: str) -> ModelStatusResponse:
-        """Return the onboarding/registration status of a previously uploaded model."""
-        from fastapi import HTTPException
-
-        from drifttrace.serving.onboarding import REGISTRY
-
         onboarded = REGISTRY.get(model_id)
         if onboarded is None:
             raise HTTPException(status_code=404, detail="model not found")
@@ -467,63 +354,111 @@ def create_app(settings: ServingSettings | None = None) -> Any:
     return app
 
 
-def run_demo_scenario(
-    settings: ServingSettings, scenario: str, *, n: int = 300, seed: int = 7
+def _clear_latest_report(settings: ServingSettings) -> None:
+    """Remove the persisted latest RCA report so a new active model starts clean."""
+    latest = settings.reports_dir_path / "latest_rca.json"
+    try:
+        latest.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def run_drift_test(
+    settings: ServingSettings,
+    ctx: ActiveContext,
+    *,
+    intensity: float = 1.0,
+    feature: str | None = None,
+    n: int = 300,
+    seed: int = 7,
 ) -> dict:
-    """Execute a deterministic scenario through the real Phase 4 pipeline."""
+    """Perturb the active model's reference data and run the real monitoring pipeline.
+
+    Draws ``n`` rows from the reference, applies a generic shift to numeric feature(s),
+    predicts through the active model, builds prediction events, and runs the Phase 4
+    windower + processor (drift -> RCA -> report -> alert). Writes latest_rca.json.
+    """
+    import numpy as np
+
     from drifttrace.alerting.alerter import Alerter
-    from drifttrace.alerting.webhook import WebhookClient
-    from drifttrace.config import get_paths
-    from drifttrace.drift.baseline import Baseline
     from drifttrace.drift.config import load_drift_config
-    from drifttrace.graph.loader import load_graph
-    from drifttrace.streaming.demo import SCENARIOS, generate_events
+    from drifttrace.streaming.event import PredictionEvent, new_event_id
     from drifttrace.streaming.processing import run_scenario_over_events
 
-    if scenario not in SCENARIOS:
-        from fastapi import HTTPException
+    rng = np.random.default_rng(seed)
+    ref = ctx.reference_frame
+    feature_names = ctx.feature_names
 
-        raise HTTPException(status_code=422, detail=f"unknown scenario '{scenario}'")
+    # Sample rows (with replacement) from the reference.
+    idx = rng.integers(0, len(ref), size=n)
+    sample = ref.iloc[idx].reset_index(drop=True)
 
-    paths = get_paths()
-    baseline = Baseline.load(paths.artifacts / "baseline.json")
-    graph = load_graph()
+    # Determine numeric features to perturb.
+    numeric = [
+        f
+        for f in feature_names
+        if f in sample.columns and pd.api.types.is_numeric_dtype(sample[f])
+    ]
+    targets = [feature] if feature and feature in numeric else numeric
+    if intensity > 0 and targets:
+        for f in targets:
+            col = sample[f].to_numpy(dtype=float)
+            std = float(np.nanstd(col)) or 1.0
+            # A deterministic mean shift proportional to the feature's own spread.
+            sample[f] = col + intensity * 1.5 * std
+
+    # Predict through the active model and build standardized events.
+    events: list[PredictionEvent] = []
+    meta = ctx.adapter.metadata()
+    for _, row in sample.iterrows():
+        feats = {f: row[f] for f in feature_names if f in sample.columns}
+        try:
+            result = ctx.adapter.predict_one(feats)
+        except Exception:  # noqa: BLE001 - skip rows the model rejects
+            continue
+        events.append(
+            to_standard_event(result, meta, request_id=None, source="drift-test").model_copy(
+                update={"event_id": new_event_id()}
+            )
+        )
+
     config = load_drift_config()
-
-    webhook_url = os.environ.get("WEBHOOK_STUB_URL")
-    webhook = WebhookClient(webhook_url) if webhook_url else None
+    graph = ctx.graph if ctx.graph is not None else _trivial_graph(ctx.feature_names)
     alerter = Alerter(
-        webhook=webhook,
-        cooldown_seconds=0,  # demo: always emit so the UI shows the alert
+        webhook=None,
+        cooldown_seconds=0,
         alert_log_path=settings.reports_dir_path / "alerts.jsonl",
     )
-    model_version = str(baseline.model_version) if baseline.model_version is not None else None
-    events = generate_events(scenario, n=n, seed=seed, model_version=model_version)
     outcomes = run_scenario_over_events(
         events,
-        baseline,
+        ctx.baseline,
         graph,
         config,
-        alerter=alerter,
+        alerter=alerter if ctx.graph is not None else None,
         reports_dir=settings.reports_dir_path,
         window_size=n,
-        min_window_samples=30,
+        min_window_samples=min(30, max(10, n // 10)),
     )
     outcome = outcomes[-1] if outcomes else None
     return {
-        "scenario": scenario,
+        "intensity": intensity,
+        "feature": feature,
         "windows": len(outcomes),
+        "dependencies_available": ctx.graph is not None,
         "outcome": outcome.to_dict() if outcome is not None else None,
     }
 
 
-def _explain_background(holder: ModelHolder) -> pd.DataFrame:
-    """Build a small deterministic background sample of model features for explainers."""
-    import numpy as np
+def _trivial_graph(feature_names: list[str]) -> Any:
+    """A graph with no edges (each feature independent) for drift-only monitoring.
 
-    assert holder.transform_params is not None
-    rng = np.random.default_rng(0)
-    incomes = rng.lognormal(mean=8.5, sigma=0.5, size=50)
-    frame = pd.DataFrame({"income": incomes})
-    featured = transform(frame, holder.transform_params)
-    return featured[MODEL_FEATURES]
+    Used when no dependency graph was provided: drift is still detected per feature, but
+    no upstream root-cause tracing is possible (every drifted node is independent).
+    """
+    from drifttrace.bundle.reference import OUTPUT_NODE
+    from drifttrace.graph.dag import DependencyGraph, NodeSpec
+
+    specs = [NodeSpec(name=f, kind="raw_input") for f in feature_names]
+    # A model_output node fed by all features keeps the graph connected + valid.
+    specs.append(NodeSpec(name=OUTPUT_NODE, kind="model_output", parents=tuple(feature_names)))
+    return DependencyGraph(specs)

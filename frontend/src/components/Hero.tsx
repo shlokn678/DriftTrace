@@ -13,10 +13,10 @@ export function Hero() {
           Trace the cause.
         </h1>
         <p className="hero__lede muted">
-          DriftTrace watches the loan-default feature pipeline, detects distribution
-          drift per node with KS and PSI, then walks the declared dependency graph to
-          name the earliest supported root cause - so an operator acts on one diagnosis
-          instead of a wall of alerts.
+          Upload any supported model with its reference data. DriftTrace detects
+          distribution drift per feature with KS and PSI, then - when a dependency graph
+          is provided - traces upstream to the likely root cause, so an operator acts on
+          one diagnosis instead of a wall of alerts.
         </p>
       </div>
       <LifecycleStrip />

@@ -1,11 +1,8 @@
-"""Adapter registry + automatic model inspection (Phase 5).
+"""Adapter registry + model inspection (model-agnostic).
 
-Given a loaded model object (or a saved model file), determine which adapter family
-supports it and build the adapter. Only scikit-learn is supported in this phase;
-unsupported models raise a clear :class:`AdapterError`.
-
-DriftTrace never fabricates metadata. When something cannot be determined it stays
-unknown and is reported as such.
+Detects the model family and builds the appropriate :class:`ModelAdapter`. The MVP
+implements one adapter - scikit-learn. Future adapters (XGBoost, LightGBM, ONNX,
+PyTorch) can be registered here without touching the monitoring/RCA core.
 """
 
 from __future__ import annotations
@@ -15,17 +12,18 @@ from pathlib import Path
 from typing import Any
 
 from drifttrace.adapters.base import AdapterError, ModelAdapter
-from drifttrace.adapters.sklearn_adapter import SklearnAdapter
-from drifttrace.features.transform import TransformParams, fit_params
+from drifttrace.adapters.sklearn_adapter import (
+    SklearnAdapter,
+    detect_feature_names,
+    detect_task,
+)
 
-# File extensions we will attempt to load. Others are rejected up front with a clear
-# message rather than a stack trace.
 SUPPORTED_SUFFIXES = {".pkl", ".pickle", ".joblib"}
 
 
 @dataclass
 class InspectionResult:
-    """What auto-inspection could determine about an uploaded model."""
+    """What auto-inspection could determine about an uploaded model + reference."""
 
     supported: bool
     framework: str | None
@@ -34,8 +32,8 @@ class InspectionResult:
     n_features: int | None
     supports_proba: bool
     features: list[str] = field(default_factory=list)
-    missing: list[str] = field(default_factory=list)  # info that must be supplied
-    message: str | None = None  # user-facing note when unsupported / limited
+    missing: list[str] = field(default_factory=list)
+    message: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -56,7 +54,6 @@ def _looks_like_sklearn(model: Any) -> bool:
     module = type(model).__module__ or ""
     if module.startswith("sklearn") or module.startswith("imblearn"):
         return True
-    # Duck-typing fallback: sklearn estimators expose get_params + predict.
     return hasattr(model, "get_params") and (
         hasattr(model, "predict") or hasattr(model, "predict_proba")
     )
@@ -64,21 +61,25 @@ def _looks_like_sklearn(model: Any) -> bool:
 
 def build_adapter(
     model: Any,
-    transform_params: TransformParams,
+    feature_names: list[str],
     *,
-    model_id: str = "drifttrace-loan-default",
+    model_id: str,
     model_version: str | None = None,
+    name: str | None = None,
+    task: str | None = None,
 ) -> ModelAdapter:
-    """Build the appropriate adapter for a loaded model object.
+    """Build the appropriate adapter for a loaded model over ``feature_names``.
 
-    Raises :class:`AdapterError` if no supported adapter matches (unsupported model).
+    Raises :class:`AdapterError` if no supported adapter matches.
     """
     if _looks_like_sklearn(model):
         adapter = SklearnAdapter(
             model,
-            transform_params,
+            feature_names,
             model_id=model_id,
             model_version=model_version,
+            name=name,
+            task=task,
         )
         adapter.validate()
         return adapter
@@ -86,17 +87,17 @@ def build_adapter(
         "Unsupported model format.",
         detail=(
             f"no adapter for model type {type(model).__module__}.{type(model).__name__}; "
-            "scikit-learn is the only supported adapter in this phase"
+            "scikit-learn is the only supported adapter"
         ),
     )
 
 
-def _load_object(path: Path) -> Any:
+def load_model_object(path: Path) -> Any:
     """Load a saved model object from a supported file. Raises AdapterError on failure."""
     suffix = path.suffix.lower()
     if suffix not in SUPPORTED_SUFFIXES:
         raise AdapterError(
-            "Unsupported model format.",
+            "Unsupported model file format.",
             detail=f"file extension '{suffix}' is not supported "
             f"(supported: {sorted(SUPPORTED_SUFFIXES)})",
         )
@@ -118,31 +119,17 @@ def _load_object(path: Path) -> Any:
         ) from exc
 
 
-def inspect_model_file(
-    path: Path,
+def inspect_model(
+    model: Any,
     *,
-    reference_available: bool,
-    graph_available: bool,
+    reference_features: list[str] | None = None,
+    graph_available: bool = False,
 ) -> InspectionResult:
-    """Auto-inspect a saved model file and report what DriftTrace could determine.
+    """Inspect a loaded model (with optional reference feature names) generically.
 
-    Only asks (via ``missing``) for what genuinely cannot be determined:
-    - reference data (needed for drift detection) when not already available;
-    - feature dependencies (needed for root-cause tracing) when not available.
+    ``missing`` reports only genuinely undeterminable information (a dependency graph,
+    when absent). Reference data is validated separately by the onboarding layer.
     """
-    try:
-        model = _load_object(path)
-    except AdapterError as exc:
-        return InspectionResult(
-            supported=False,
-            framework=None,
-            name=None,
-            task=None,
-            n_features=None,
-            supports_proba=False,
-            message=exc.message,
-        )
-
     if not _looks_like_sklearn(model):
         return InspectionResult(
             supported=False,
@@ -154,38 +141,24 @@ def inspect_model_file(
             message="Unsupported model format. scikit-learn models are supported.",
         )
 
-    # Build a provisional adapter to read metadata + schema. Transform params are not
-    # stored inside a bare model file, so a neutral default is used purely for
-    # introspection here; the real serving path uses the trained params.
-    adapter = SklearnAdapter(model, _default_params())
-    meta = adapter.metadata()
-    schema = adapter.feature_schema()
+    features = detect_feature_names(model, fallback=reference_features)
+    task = detect_task(model)
+    supports_proba = hasattr(model, "predict_proba")
 
     missing: list[str] = []
-    if not reference_available:
-        missing.append("reference_data")
+    message: str | None = None
     if not graph_available:
         missing.append("dependencies")
-
-    message: str | None = None
-    if "dependencies" in missing:
-        message = "Root-cause tracing is limited without feature dependency information."
+        message = "Root-cause tracing is limited without a dependency graph."
 
     return InspectionResult(
         supported=True,
-        framework=meta.framework,
-        name=meta.name,
-        task=meta.task,
-        n_features=schema.n_features,
-        supports_proba=meta.supports_proba,
-        features=list(schema.features),
+        framework="scikit-learn",
+        name=type(model).__name__,
+        task=task,
+        n_features=len(features) if features else None,
+        supports_proba=supports_proba,
+        features=list(features),
         missing=missing,
         message=message,
     )
-
-
-def _default_params() -> TransformParams:
-    """Neutral transform params for introspection only (not used for real serving)."""
-    import numpy as np
-
-    return fit_params(np.array([1000.0, 2000.0, 3000.0], dtype=float))

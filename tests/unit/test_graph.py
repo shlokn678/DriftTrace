@@ -1,45 +1,49 @@
-"""Unit tests for the declared dependency graph (FR-8) and feature/graph consistency (FR-3.2)."""
+"""Unit tests for the declared dependency graph (generic, any feature names)."""
 
 from __future__ import annotations
 
 import pytest
 
-from drifttrace.features.transform import DERIVED_FEATURES, RAW_INPUTS
+from drifttrace.bundle.graph_json import graph_from_edges
 from drifttrace.graph.dag import DependencyGraph, GraphValidationError, NodeSpec
-from drifttrace.graph.loader import load_graph
+
+
+def _chain() -> DependencyGraph:
+    # feature_a -> feature_b -> feature_c (+ an appended prediction output node).
+    return graph_from_edges([["feature_a", "feature_b"], ["feature_b", "feature_c"]])
 
 
 @pytest.mark.unit
-def test_loads_declared_chain() -> None:
-    g = load_graph()
-    assert set(g.nodes) == {"income", "credit_score", "risk_score", "prediction"}
-    assert g.kind("income") == "raw_input"
+def test_builds_chain_from_edges() -> None:
+    g = _chain()
+    assert set(g.nodes) == {"feature_a", "feature_b", "feature_c", "prediction"}
+    assert g.kind("feature_a") == "raw_input"
     assert g.kind("prediction") == "model_output"
 
 
 @pytest.mark.unit
 def test_traversal_parents_children_ancestors() -> None:
-    g = load_graph()
-    assert g.parents("credit_score") == ["income"]
-    assert g.children("income") == ["credit_score"]
-    assert g.ancestors("risk_score") == {"income", "credit_score"}
-    assert g.ancestors("prediction") == {"income", "credit_score", "risk_score"}
+    g = _chain()
+    assert g.parents("feature_b") == ["feature_a"]
+    assert g.children("feature_a") == ["feature_b"]
+    assert g.ancestors("feature_c") == {"feature_a", "feature_b"}
+    assert {"feature_a", "feature_b", "feature_c"} <= g.ancestors("prediction")
 
 
 @pytest.mark.unit
 def test_topological_order_parents_before_children() -> None:
-    g = load_graph()
+    g = _chain()
     order = g.topological_order()
-    assert order.index("income") < order.index("credit_score")
-    assert order.index("credit_score") < order.index("risk_score")
-    assert order.index("risk_score") < order.index("prediction")
+    assert order.index("feature_a") < order.index("feature_b")
+    assert order.index("feature_b") < order.index("feature_c")
+    assert order.index("feature_c") < order.index("prediction")
 
 
 @pytest.mark.unit
 def test_feature_nodes_exclude_model_output() -> None:
-    g = load_graph()
+    g = _chain()
     assert "prediction" not in g.feature_nodes()
-    assert g.feature_nodes() == ["income", "credit_score", "risk_score"]
+    assert set(g.feature_nodes()) == {"feature_a", "feature_b", "feature_c"}
 
 
 @pytest.mark.unit
@@ -63,8 +67,8 @@ def test_undefined_parent_rejected() -> None:
 @pytest.mark.unit
 def test_orphan_rejected() -> None:
     nodes = [
-        NodeSpec("income", "raw_input"),
-        NodeSpec("credit_score", "derived_feature", parents=("income",)),
+        NodeSpec("a", "raw_input"),
+        NodeSpec("b", "derived_feature", parents=("a",)),
         NodeSpec("lonely", "raw_input"),
     ]
     with pytest.raises(GraphValidationError, match="orphan"):
@@ -75,19 +79,3 @@ def test_orphan_rejected() -> None:
 def test_invalid_kind_rejected() -> None:
     with pytest.raises(GraphValidationError, match="invalid kind"):
         DependencyGraph([NodeSpec("x", "not_a_kind")])
-
-
-@pytest.mark.unit
-def test_feature_graph_consistency() -> None:
-    """FR-3.2 / FR-3 AC-2: features computed in code must match the declared graph.
-
-    The transform's raw inputs + derived features must be exactly the graph's
-    feature nodes (everything except the model output).
-    """
-    g = load_graph()
-    graph_feature_nodes = set(g.feature_nodes())
-    code_feature_nodes = set(RAW_INPUTS) | set(DERIVED_FEATURES)
-    assert code_feature_nodes == graph_feature_nodes, (
-        f"code features {sorted(code_feature_nodes)} != "
-        f"graph features {sorted(graph_feature_nodes)}"
-    )

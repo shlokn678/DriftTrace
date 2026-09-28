@@ -75,13 +75,17 @@ class FeatureSchema:
 class PredictionResult:
     """The model-agnostic result of a single prediction.
 
-    ``features`` is the full feature vector the model actually consumed (raw + derived),
-    so the monitoring core sees the same values the model saw.
+    ``features`` is the feature vector the model consumed, so the monitoring core sees
+    the same values the model saw. ``prediction`` is the discrete class for classifiers
+    (``None`` for regressors); ``probability`` is the positive/decision score when
+    available; ``output`` is the numeric value used for output-drift monitoring
+    (predicted class for classifiers, predicted value for regressors).
     """
 
-    prediction: int
+    prediction: int | None
     probability: float | None
-    features: dict[str, float]
+    features: dict[str, float | str]
+    output: float | None = None
 
 
 class ModelAdapter(ABC):
@@ -103,11 +107,11 @@ class ModelAdapter(ABC):
         """Whether the model can produce class probabilities."""
 
     @abstractmethod
-    def predict_one(self, raw_inputs: dict[str, float]) -> PredictionResult:
-        """Predict for a single record given the user-supplied raw inputs.
+    def predict_one(self, features: dict[str, float | str]) -> PredictionResult:
+        """Predict for a single record given its feature values (name -> value).
 
-        Implementations compute any derived features internally and return the full
-        feature vector used, so the caller stays model-agnostic.
+        Implementations order the values by the model's expected feature names and
+        return the feature vector used, so the caller stays model-agnostic.
         """
 
     def validate(self) -> None:
@@ -134,15 +138,18 @@ def to_standard_event(
     This is the single conversion point between the model-specific adapter output and
     the model-agnostic event the drift/RCA/alerting core consumes.
     """
-    features = {k: float(v) for k, v in result.features.items()}
+    features: dict[str, float | str] = {
+        k: (v if isinstance(v, str) else float(v)) for k, v in result.features.items()
+    }
     return PredictionEvent(
         event_id=new_event_id(),
         request_id=request_id,
         model_id=metadata.model_id,
         model_version=metadata.model_version,
         features=features,
-        prediction=int(result.prediction),
+        prediction=(None if result.prediction is None else int(result.prediction)),
         probability=(None if result.probability is None else float(result.probability)),
+        output=(None if result.output is None else float(result.output)),
         group=group,
         source=source,
     )

@@ -6,7 +6,9 @@
 
 import type {
   ActiveModelResponse,
+  DriftTestResponse,
   Explanation,
+  FeatureValue,
   HealthResponse,
   Metrics,
   ModelInfoResponse,
@@ -14,8 +16,6 @@ import type {
   PredictResponse,
   RcaLatestResponse,
   ReadyResponse,
-  RunScenarioResponse,
-  ScenarioName,
   UploadModelResponse,
 } from "./types";
 
@@ -107,24 +107,24 @@ export const api = {
   health: () => request<HealthResponse>("/health"),
   ready: () => request<ReadyResponse>("/ready"),
   modelInfo: () => request<ModelInfoResponse>("/model-info"),
-  predict: (income: number, requestId?: string) =>
+  predict: (features: Record<string, FeatureValue>, requestId?: string) =>
     request<PredictResponse>("/predict", {
       method: "POST",
-      body: JSON.stringify({ income, request_id: requestId ?? null }),
+      body: JSON.stringify({ features, request_id: requestId ?? null }),
     }),
   rcaLatest: () => request<RcaLatestResponse>("/rca/latest"),
-  explain: (income: number, method: "shap" | "lime") =>
+  explain: (features: Record<string, FeatureValue>, method: "shap" | "lime") =>
     request<Explanation>("/explain", {
       method: "POST",
-      body: JSON.stringify({ income, method }),
+      body: JSON.stringify({ features, method }),
     }),
   metrics: async (): Promise<Metrics> => parseMetrics(await requestText("/metrics")),
-  runScenario: (scenario: ScenarioName, n = 300, seed = 7) =>
-    request<RunScenarioResponse>("/demo/run-scenario", {
+  runDriftTest: (intensity = 2, feature: string | null = null, n = 300, seed = 7) =>
+    request<DriftTestResponse>("/demo/run-drift-test", {
       method: "POST",
-      body: JSON.stringify({ scenario, n, seed }),
+      body: JSON.stringify({ intensity, feature, n, seed }),
     }),
-  // ---- Phase 5: model onboarding ----
+  // ---- Model bundle onboarding ----
   uploadModel: (file: File) => {
     const form = new FormData();
     form.append("file", file);

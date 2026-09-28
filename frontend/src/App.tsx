@@ -55,7 +55,7 @@ export default function App() {
       <Header
         healthy={healthy}
         ready={ready.data?.ready ?? null}
-        modelVersion={bundle.modelVersion}
+        modelName={activeModel.data?.active ? (activeModel.data.name ?? "model") : null}
         onRefresh={bump}
         refreshing={refreshing}
         theme={theme}
@@ -99,20 +99,24 @@ export default function App() {
 
         {advanced && (
           <div className="stack stack-5">
-            <RcaSection report={report} />
+            <RcaSection
+              report={report}
+              dependenciesAvailable={activeModel.data?.dependencies_available ?? false}
+            />
 
             <section className="section bento">
               <IncidentCard report={report} />
-              <ExplanationPanel />
+              <ExplanationPanel features={activeModel.data?.features ?? []} />
             </section>
 
             <DriftMetrics report={report} />
 
             <section className="section bento">
               <OperatorActions
-                onScenarioComplete={bump}
+                onDriftTestComplete={bump}
                 onViewRca={scrollTo("rca")}
                 onExplain={scrollTo("diagnostics")}
+                hasActiveModel={activeModel.data?.active ?? false}
               />
             </section>
 

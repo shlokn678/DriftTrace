@@ -1,33 +1,47 @@
 import { useState } from "react";
-import { Play, Zap, Eye, Sparkles, RotateCcw, ShieldCheck } from "lucide-react";
+import { Zap, Eye, Sparkles, RotateCcw, ShieldCheck } from "lucide-react";
 import { api, ApiError } from "../api/client";
-import type { RunScenarioResponse, ScenarioName } from "../api/types";
+import type { DriftTestResponse } from "../api/types";
 import { BentoCard, Button, MonoLabel, Pill } from "../components/primitives";
 
 interface Props {
-  onScenarioComplete: () => void;
+  onDriftTestComplete: () => void;
   onViewRca: () => void;
   onExplain: () => void;
+  /** Whether a model is active (drift test requires one). */
+  hasActiveModel: boolean;
 }
 
 type ActionState = { kind: "idle" | "running" | "done" | "error" | "pending"; message?: string };
 
-/** Operator controls + deterministic demo drivers. Real backend where a workflow exists;
- * operator-approved actions honestly reflect the backend's approval semantics. */
-export function OperatorActions({ onScenarioComplete, onViewRca, onExplain }: Props) {
+/** Operator controls: a generic drift test against the active model's reference data,
+ * plus operator-approved actions that honestly reflect the backend's approval semantics.
+ * The frontend never computes drift/RCA - it only triggers the real backend pipeline. */
+export function OperatorActions({
+  onDriftTestComplete,
+  onViewRca,
+  onExplain,
+  hasActiveModel,
+}: Props) {
   const [state, setState] = useState<ActionState>({ kind: "idle" });
   const [pendingAction, setPendingAction] = useState<"retrain" | "rollback" | null>(null);
 
-  async function runScenario(scenario: ScenarioName, label: string) {
+  async function runDriftTest(intensity: number, label: string) {
     setState({ kind: "running", message: `Running ${label}...` });
     try {
-      const res: RunScenarioResponse = await api.runScenario(scenario);
+      const res: DriftTestResponse = await api.runDriftTest(intensity);
       const out = res.outcome;
-      const summary = out?.has_root_cause
-        ? `Root cause: ${out.root_cause_candidates.join(", ")}`
-        : "No drift detected";
+      const summary = !out
+        ? "No result"
+        : out.has_root_cause
+          ? `Likely origin: ${out.root_cause_candidates.join(", ")}`
+          : out.drifted_nodes.length > 0
+            ? `Drift in ${out.drifted_nodes.length} feature(s); origin undetermined${
+                res.dependencies_available ? "" : " (no graph)"
+              }`
+            : "No drift detected";
       setState({ kind: "done", message: `${label} complete. ${summary}.` });
-      onScenarioComplete();
+      onDriftTestComplete();
     } catch (err) {
       setState({
         kind: "error",
@@ -41,7 +55,7 @@ export function OperatorActions({ onScenarioComplete, onViewRca, onExplain }: Pr
       <div className="card__head">
         <div>
           <MonoLabel>Operator</MonoLabel>
-          <h2 style={{ marginTop: 6 }}>Run the demo. Decide the response.</h2>
+          <h2 style={{ marginTop: 6 }}>Test for drift. Decide the response.</h2>
         </div>
         {state.kind !== "idle" && (
           <Pill
@@ -61,24 +75,27 @@ export function OperatorActions({ onScenarioComplete, onViewRca, onExplain }: Pr
 
       <div className="op-grid">
         <div className="op-group">
-          <MonoLabel>Deterministic demo</MonoLabel>
+          <MonoLabel>Drift test</MonoLabel>
           <div className="row row-3 wrap" style={{ marginTop: "var(--space-3)" }}>
-            <Button variant="default" onClick={() => runScenario("control", "Normal run")} disabled={state.kind === "running"}>
-              <Play size={16} /> Run Normal
+            <Button
+              variant="primary"
+              onClick={() => runDriftTest(2, "Drift test")}
+              disabled={state.kind === "running" || !hasActiveModel}
+            >
+              <Zap size={16} /> Run Drift Test
             </Button>
-            <Button variant="primary" onClick={() => runScenario("income_annual", "Income drift")} disabled={state.kind === "running"}>
-              <Zap size={16} /> Simulate Income Drift
-            </Button>
-            <Button variant="default" onClick={() => runScenario("mid_chain", "Mid-chain drift")} disabled={state.kind === "running"}>
-              Mid-chain
-            </Button>
-            <Button variant="default" onClick={() => runScenario("two_roots", "Two-root")} disabled={state.kind === "running"}>
-              Two roots
+            <Button
+              variant="default"
+              onClick={() => runDriftTest(0, "Baseline test")}
+              disabled={state.kind === "running" || !hasActiveModel}
+            >
+              Run Baseline (no shift)
             </Button>
           </div>
           <p className="tertiary" style={{ fontSize: "0.8rem", marginTop: "var(--space-3)" }}>
-            Runs the real KS/PSI + graph RCA pipeline on the backend and writes the latest
-            monitoring report. Not a frontend-only simulation.
+            {hasActiveModel
+              ? "Perturbs a sample of the active model's reference data and runs it through the real KS/PSI + graph RCA pipeline. Not a frontend-only simulation."
+              : "Activate a model first. The drift test uses that model's own reference data."}
           </p>
         </div>
 

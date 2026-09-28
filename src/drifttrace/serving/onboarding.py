@@ -1,45 +1,43 @@
-"""Model onboarding + activation for the local MVP (Phase 5).
+"""Model bundle onboarding + active-model management (model-agnostic).
 
-Implements the "upload one model, DriftTrace figures out the rest" flow:
+A user uploads a bundle (``model.pkl`` + ``reference.csv`` + optional ``graph.json``).
+DriftTrace inspects it, and the user activates it. The active model then:
+  - serves ``/predict`` (generic feature-vector payload),
+  - defines the drift baseline (from its reference data),
+  - defines the optional dependency graph (from its graph.json),
+  - is monitored via incoming prediction events and the drift-test.
 
-1. The user uploads a single supported model file.
-2. DriftTrace inspects it automatically (framework, task, features, proba support).
-3. Reference data and dependency information are reused from the existing project
-   context when available; only genuinely missing information is requested.
-4. A supported model can be *activated* ("Use this model") so ``/predict`` serves it.
-
-This is an in-memory onboarding registry for the local MVP - it records what was
-detected so the UI can show a compact "MODEL READY" confirmation, and it keeps the
-uploaded file on disk (under the model store) so an onboarded model can become the
-active model. It does NOT replace the trained loan model, which remains the default
-and fallback when nothing custom is activated. There is no database-backed registry.
+There is NO built-in / default / fallback model. A fresh install starts with no model
+registered and no active model. The registry is in-memory for the local MVP - no
+database.
 """
 
 from __future__ import annotations
 
-import shutil
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pandas as pd
+
 from drifttrace.adapters.base import ModelAdapter
-from drifttrace.adapters.registry import build_adapter, inspect_model_file
+from drifttrace.adapters.registry import build_adapter, inspect_model, load_model_object
+from drifttrace.bundle.graph_json import GraphParseError, load_graph_json
+from drifttrace.bundle.loader import BundleError, extract_bundle_zip, load_bundle_dir
+from drifttrace.bundle.reference import (
+    OUTPUT_NODE,
+    ReferenceError,
+    baseline_from_profile,
+    profile_reference,
+)
 from drifttrace.config import get_paths
-
-
-def _reference_available() -> bool:
-    """Reference/baseline distribution exists if a drift baseline is present."""
-    return (get_paths().artifacts / "baseline.json").exists()
-
-
-def _graph_available() -> bool:
-    """A declared dependency graph exists (enables root-cause tracing)."""
-    return get_paths().graph_yaml.exists()
+from drifttrace.drift.baseline import Baseline
+from drifttrace.graph.dag import DependencyGraph
 
 
 @dataclass
 class OnboardedModel:
-    """A model DriftTrace has inspected during onboarding (a *registered* model)."""
+    """A model + reference (+ optional graph) DriftTrace has inspected (registered)."""
 
     model_id: str
     supported: bool
@@ -53,64 +51,111 @@ class OnboardedModel:
     dependencies_available: bool = False
     missing: list[str] = field(default_factory=list)
     message: str | None = None
-    # Local path where the uploaded file is retained so it can be activated. None for
-    # unsupported uploads (which are not retained).
-    stored_path: Path | None = None
+    reference_rows: int | None = None
+    # Retained bundle paths so the model can be activated.
+    bundle_dir: Path | None = None
+    model_path: Path | None = None
+    reference_path: Path | None = None
+    graph_path: Path | None = None
 
     @property
     def ready_to_monitor(self) -> bool:
-        # Ready when supported and a reference distribution exists. Dependency info is
-        # not strictly required to monitor, but its absence limits root-cause tracing.
+        # A supported model with reference data is monitorable. A graph only adds RCA.
         return self.supported and self.reference_available
 
 
-class OnboardingRegistry:
-    """In-memory registry of onboarded (registered) models, per serving process.
+@dataclass
+class ActiveContext:
+    """Everything needed to serve + monitor the active model."""
 
-    Distinguishes two states:
-    - *registered*: a model that has been uploaded + inspected (kept in ``_models``).
-    - *active*: the single registered model currently selected to serve predictions
-      (``active_model_id``). When ``None``, the default loan model serves.
-    """
+    model_id: str
+    adapter: ModelAdapter
+    baseline: Baseline
+    graph: DependencyGraph | None
+    feature_names: list[str]
+    reference_frame: pd.DataFrame
+
+
+class OnboardingRegistry:
+    """In-memory registry of onboarded models + the single active model (per process)."""
 
     def __init__(self) -> None:
         self._models: dict[str, OnboardedModel] = {}
         self.active_model_id: str | None = None
+        self._active_ctx: ActiveContext | None = None
 
-    # ---- registration (upload + inspect) ---------------------------------------------
-    def onboard(self, model_path: Path, *, original_name: str | None = None) -> OnboardedModel:
-        """Inspect an uploaded model file and record what was determined.
+    # ---- registration ----------------------------------------------------------------
+    def onboard_bundle(self, source: Path, *, original_name: str | None = None) -> OnboardedModel:
+        """Inspect an uploaded bundle (a .zip or a directory of the three files).
 
-        Supported models are retained under the model store so they can be activated;
-        unsupported uploads are not retained.
+        Raises :class:`BundleError` / :class:`ReferenceError` / :class:`GraphParseError`
+        with user-facing messages when the bundle is unusable.
         """
-        ref = _reference_available()
-        graph = _graph_available()
-        result = inspect_model_file(model_path, reference_available=ref, graph_available=graph)
         model_id = "mdl-" + uuid.uuid4().hex[:12]
+        store = get_paths().model_store / model_id
+        store.mkdir(parents=True, exist_ok=True)
 
-        stored_path: Path | None = None
-        if result.supported:
-            store = get_paths().model_store
-            store.mkdir(parents=True, exist_ok=True)
-            suffix = model_path.suffix or ".pkl"
-            stored_path = store / f"{model_id}{suffix}"
-            shutil.copyfile(model_path, stored_path)
+        if source.is_dir():
+            loaded = load_bundle_dir(source)
+            # Copy into the model store so activation survives temp cleanup.
+            import shutil
+
+            model_dst = store / loaded.model_path.name
+            ref_dst = store / "reference.csv"
+            shutil.copyfile(loaded.model_path, model_dst)
+            shutil.copyfile(loaded.reference_path, ref_dst)
+            graph_dst: Path | None = None
+            if loaded.graph_path is not None:
+                graph_dst = store / "graph.json"
+                shutil.copyfile(loaded.graph_path, graph_dst)
+            loaded_model, loaded_ref, loaded_graph = model_dst, ref_dst, graph_dst
+        else:
+            loaded = extract_bundle_zip(source, store)
+            loaded_model, loaded_ref, loaded_graph = (
+                loaded.model_path,
+                loaded.reference_path,
+                loaded.graph_path,
+            )
+
+        # Load + inspect the model.
+        model = load_model_object(loaded_model)
+        reference_frame = _read_reference(loaded_ref)
+        profile = profile_reference(reference_frame)
+
+        graph_available = loaded_graph is not None
+        inspection = inspect_model(
+            model,
+            reference_features=profile.feature_names,
+            graph_available=graph_available,
+        )
+
+        # If a graph was provided, validate it now so problems surface at onboarding.
+        graph_message: str | None = None
+        if graph_available:
+            try:
+                load_graph_json(loaded_graph, feature_names=profile.feature_names)
+            except GraphParseError as exc:
+                graph_available = False
+                graph_message = exc.message
 
         onboarded = OnboardedModel(
             model_id=model_id,
-            supported=result.supported,
-            framework=result.framework,
-            name=result.name or original_name,
-            task=result.task,
-            n_features=result.n_features,
-            supports_proba=result.supports_proba,
-            features=result.features,
-            reference_available=ref,
-            dependencies_available=graph,
-            missing=result.missing,
-            message=result.message,
-            stored_path=stored_path,
+            supported=inspection.supported,
+            framework=inspection.framework,
+            name=inspection.name,
+            task=inspection.task,
+            n_features=inspection.n_features or profile.n_features,
+            supports_proba=inspection.supports_proba,
+            features=inspection.features or profile.feature_names,
+            reference_available=True,
+            dependencies_available=graph_available,
+            missing=[] if graph_available else ["dependencies"],
+            message=graph_message or inspection.message,
+            reference_rows=profile.n_rows,
+            bundle_dir=store,
+            model_path=loaded_model,
+            reference_path=loaded_ref,
+            graph_path=loaded_graph if graph_available else None,
         )
         if onboarded.supported:
             self._models[model_id] = onboarded
@@ -119,52 +164,101 @@ class OnboardingRegistry:
     def get(self, model_id: str) -> OnboardedModel | None:
         return self._models.get(model_id)
 
-    # ---- activation ------------------------------------------------------------------
-    def activate(self, model_id: str) -> OnboardedModel:
-        """Mark a registered, supported model as the active model.
-
-        Raises ``KeyError`` if unknown and ``ValueError`` if it cannot be activated.
-        """
+    # ---- activation -------------------------------------------------------------------
+    def activate(self, model_id: str) -> ActiveContext:
+        """Activate a registered, supported model. Builds its adapter, baseline, graph."""
         model = self._models.get(model_id)
         if model is None:
             raise KeyError(model_id)
-        if not model.supported or model.stored_path is None:
+        if not model.supported or model.model_path is None or model.reference_path is None:
             raise ValueError("model is not supported and cannot be activated")
-        if not model.ready_to_monitor:
-            raise ValueError("reference data is required before a model can be activated")
+
+        raw = load_model_object(model.model_path)
+        reference_frame = _read_reference(model.reference_path)
+        profile = profile_reference(reference_frame)
+
+        adapter = build_adapter(
+            raw,
+            profile.feature_names,
+            model_id=model_id,
+            model_version="active",
+            name=model.name,
+            task=model.task,
+        )
+
+        # Baseline: reference feature distributions + the model's reference output
+        # distribution (so output drift can be detected).
+        output_values = _reference_outputs(adapter, reference_frame, profile.feature_names)
+        baseline = baseline_from_profile(
+            profile, model_version=model_id, output_values=output_values
+        )
+
+        graph: DependencyGraph | None = None
+        if model.graph_path is not None:
+            graph = load_graph_json(model.graph_path, feature_names=profile.feature_names)
+
+        ctx = ActiveContext(
+            model_id=model_id,
+            adapter=adapter,
+            baseline=baseline,
+            graph=graph,
+            feature_names=profile.feature_names,
+            reference_frame=reference_frame,
+        )
         self.active_model_id = model_id
-        return model
+        self._active_ctx = ctx
+        return ctx
 
     def deactivate(self) -> None:
-        """Clear the active model, restoring the default loan model."""
+        """Clear the active model. There is no fallback - monitoring stops."""
         self.active_model_id = None
+        self._active_ctx = None
 
     def active(self) -> OnboardedModel | None:
         if self.active_model_id is None:
             return None
         return self._models.get(self.active_model_id)
 
-    def build_active_adapter(self) -> ModelAdapter | None:
-        """Load + wrap the active model in an adapter, or return None if none active.
+    def active_context(self) -> ActiveContext | None:
+        return self._active_ctx
 
-        The active model file is loaded from the model store and wrapped through the
-        same adapter boundary as the default model. Transform params are the shared
-        deterministic loan-feature params (the MVP feature chain), consistent with how
-        the model was inspected on upload.
-        """
-        model = self.active()
-        if model is None or model.stored_path is None:
-            return None
-        from drifttrace.adapters.registry import _default_params, _load_object
 
-        raw = _load_object(model.stored_path)
-        return build_adapter(
-            raw,
-            _default_params(),
-            model_id=model.model_id,
-            model_version="active",
-        )
+def _read_reference(path: Path) -> pd.DataFrame:
+    try:
+        frame = pd.read_csv(path)
+    except Exception as exc:  # noqa: BLE001 - clean message for the UI
+        raise ReferenceError(
+            "The reference data could not be read as CSV.",
+            detail=f"{type(exc).__name__}: {exc}",
+        ) from exc
+    if frame.shape[1] == 0 or len(frame) == 0:
+        raise ReferenceError("The reference data is empty.")
+    return frame
 
+
+def _reference_outputs(
+    adapter: ModelAdapter,
+    reference_frame: pd.DataFrame,
+    feature_names: list[str],
+) -> list[float] | None:
+    """Run the model over a bounded reference sample to capture its output baseline."""
+    cols = [c for c in feature_names if c in reference_frame.columns]
+    if not cols:
+        return None
+    sample = reference_frame[cols].head(1000)
+    outputs: list[float] = []
+    for _, row in sample.iterrows():
+        try:
+            res = adapter.predict_one({c: row[c] for c in cols})
+        except Exception:  # noqa: BLE001 - skip rows the model rejects
+            continue
+        if res.output is not None:
+            outputs.append(float(res.output))
+    return outputs or None
+
+
+# The canonical output node name, re-exported for callers building windows/graphs.
+__all__ = ["OnboardingRegistry", "OnboardedModel", "ActiveContext", "REGISTRY", "OUTPUT_NODE"]
 
 # Process-wide onboarding registry.
 REGISTRY = OnboardingRegistry()

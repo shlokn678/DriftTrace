@@ -40,11 +40,13 @@ class PredictionEvent(BaseModel):
             and backward compatible; older events omit it.
         model_version: the registered model version that produced the prediction.
         timestamp: ISO-8601 UTC time the event was created.
-        features: the model-input feature values (node name -> value).
-        prediction: the class label (0/1) produced by the model.
-        probability: the positive-class probability (when the model supports it).
+        features: the model-input feature values (feature name -> value).
+        prediction: the discrete class label for classifiers (None for regressors).
+        probability: the positive/decision score, when the model supports it.
+        output: the model's numeric output used for output-drift monitoring - the
+            predicted class for classifiers or the predicted value for regressors.
         group: optional sensitive/group attribute value for fairness monitoring.
-        source: free-form origin marker (e.g. "api", "replay:normal", "replay:drift").
+        source: free-form origin marker (e.g. "api", "replay", "drift-test").
     """
 
     schema_version: str = SCHEMA_VERSION
@@ -53,9 +55,11 @@ class PredictionEvent(BaseModel):
     model_id: str | None = None
     model_version: str | None = None
     timestamp: str = Field(default_factory=_utc_now_iso)
-    features: dict[str, float] = Field(default_factory=dict)
+    # Feature values may be numeric (continuous) or string labels (categorical).
+    features: dict[str, float | str] = Field(default_factory=dict)
     prediction: int | None = None
     probability: float | None = None
+    output: float | None = None
     group: str | None = None
     source: str = "api"
 

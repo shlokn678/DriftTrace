@@ -1,21 +1,25 @@
-"""Unit tests for the graph-based RCA engine (FR-10)."""
+"""Unit tests for the graph-based RCA engine (generic, any feature names)."""
 
 from __future__ import annotations
 
 import pytest
 
+from drifttrace.bundle.graph_json import graph_from_edges
 from drifttrace.drift.engine import DriftReport, NodeDriftResult
 from drifttrace.drift.verdict import Verdict
-from drifttrace.graph.loader import load_graph
+from drifttrace.graph.dag import DependencyGraph, NodeSpec
 from drifttrace.rca.engine import analyze, classify_nodes
+
+CHAIN = ("feature_a", "feature_b", "feature_c")
 
 
 @pytest.fixture
 def graph():
-    return load_graph()
+    # feature_a -> feature_b -> feature_c (+ prediction output).
+    return graph_from_edges([["feature_a", "feature_b"], ["feature_b", "feature_c"]])
 
 
-def _report(drifted: list[str], all_nodes=("income", "credit_score", "risk_score")) -> DriftReport:
+def _report(drifted: list[str], all_nodes=CHAIN) -> DriftReport:
     report = DriftReport(window_id="w0", baseline_version="1")
     for n in all_nodes:
         verdict = str(Verdict.DRIFT) if n in drifted else str(Verdict.STABLE)
@@ -31,53 +35,46 @@ def test_no_drift_no_root_cause(graph) -> None:
 
 
 @pytest.mark.unit
-def test_income_root_cause_with_downstream_symptoms(graph) -> None:
-    # The main pitch scenario: all three chained nodes drift.
-    rca = analyze(_report(["income", "credit_score", "risk_score"]), graph)
+def test_upstream_root_cause_with_downstream_symptoms(graph) -> None:
+    rca = analyze(_report(["feature_a", "feature_b", "feature_c"]), graph)
     assert rca.has_root_cause is True
     roots = [c.node for c in rca.root_cause_candidates]
-    assert roots == ["income"]
-    assert set(rca.symptoms) == {"credit_score", "risk_score"}
-    # Symptom path is downstream toward the output.
+    assert roots == ["feature_a"]
+    assert set(rca.symptoms) == {"feature_b", "feature_c"}
     cand = rca.root_cause_candidates[0]
-    assert cand.symptom_path == ["credit_score", "risk_score"]
-    # Evidence attached for the root + path nodes.
-    assert set(cand.evidence.keys()) == {"income", "credit_score", "risk_score"}
+    assert cand.symptom_path == ["feature_b", "feature_c"]
+    assert set(cand.evidence.keys()) == {"feature_a", "feature_b", "feature_c"}
 
 
 @pytest.mark.unit
 def test_mid_chain_root(graph) -> None:
-    # income stable; credit_score + risk_score drift -> credit_score is the earliest root.
-    rca = analyze(_report(["credit_score", "risk_score"]), graph)
+    rca = analyze(_report(["feature_b", "feature_c"]), graph)
     roots = [c.node for c in rca.root_cause_candidates]
-    assert roots == ["credit_score"]
-    assert rca.symptoms == ["risk_score"]
+    assert roots == ["feature_b"]
+    assert rca.symptoms == ["feature_c"]
 
 
 @pytest.mark.unit
 def test_single_leaf_drift(graph) -> None:
-    rca = analyze(_report(["risk_score"]), graph)
+    rca = analyze(_report(["feature_c"]), graph)
     roots = [c.node for c in rca.root_cause_candidates]
-    assert roots == ["risk_score"]
+    assert roots == ["feature_c"]
     assert rca.symptoms == []
 
 
 @pytest.mark.unit
-def test_income_and_risk_drift_but_credit_stable_is_still_single_root(graph) -> None:
-    # In the LINEAR production chain, income is a transitive ancestor of risk_score, so
-    # even if credit_score is stable, risk_score is a SYMPTOM of income (single root).
-    rca = analyze(_report(["income", "risk_score"]), graph)
+def test_upstream_and_leaf_drift_but_middle_stable_is_still_single_root(graph) -> None:
+    # In a linear chain feature_a is a transitive ancestor of feature_c, so feature_c is
+    # a SYMPTOM of feature_a even when feature_b is stable (single root).
+    rca = analyze(_report(["feature_a", "feature_c"]), graph)
     roots = [c.node for c in rca.root_cause_candidates]
-    assert roots == ["income"]
-    assert rca.symptoms == ["risk_score"]
+    assert roots == ["feature_a"]
+    assert rca.symptoms == ["feature_c"]
 
 
 @pytest.mark.unit
 def test_two_independent_roots_on_branched_graph() -> None:
-    # Co-equal roots require independent source branches. Build a branched graph:
-    #   a -> c ;  b -> c   (a and b are independent sources feeding c)
-    from drifttrace.graph.dag import DependencyGraph, NodeSpec
-
+    # Co-equal roots require independent source branches:  a -> c ; b -> c.
     branched = DependencyGraph(
         [
             NodeSpec("a", "raw_input"),
@@ -92,22 +89,22 @@ def test_two_independent_roots_on_branched_graph() -> None:
         )
     rca = analyze(report, branched)
     roots = {c.node for c in rca.root_cause_candidates}
-    assert roots == {"a", "b"}  # both independent roots reported
+    assert roots == {"a", "b"}
     assert rca.symptoms == ["c"]
     assert len(rca.root_cause_candidates) == 2
 
 
 @pytest.mark.unit
 def test_classify_nodes(graph) -> None:
-    cls = classify_nodes(_report(["income", "credit_score", "risk_score"]), graph)
-    assert cls["income"] == "ROOT_CAUSE"
-    assert cls["credit_score"] == "SYMPTOM"
-    assert cls["risk_score"] == "SYMPTOM"
+    cls = classify_nodes(_report(["feature_a", "feature_b", "feature_c"]), graph)
+    assert cls["feature_a"] == "ROOT_CAUSE"
+    assert cls["feature_b"] == "SYMPTOM"
+    assert cls["feature_c"] == "SYMPTOM"
 
 
 @pytest.mark.unit
 def test_rca_serializable(graph) -> None:
     import json
 
-    rca = analyze(_report(["income", "credit_score", "risk_score"]), graph)
+    rca = analyze(_report(["feature_a", "feature_b", "feature_c"]), graph)
     json.dumps(rca.to_dict())

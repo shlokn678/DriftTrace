@@ -39,12 +39,10 @@ export const STATUS_LABEL: Record<StatusKind, string> = {
   insufficient: "Insufficient data",
 };
 
-export const NODE_LABELS: Record<string, string> = {
-  income: "income",
-  credit_score: "credit_score",
-  risk_score: "risk_score",
-  prediction: "prediction API",
-};
+/** Display label for a node/feature name. The prediction output node is labelled. */
+export function nodeLabel(node: string): string {
+  return node === "prediction" ? "prediction (output)" : node;
+}
 
 export function formatNumber(n: number | null | undefined, digits = 4): string {
   if (n === null || n === undefined || Number.isNaN(n)) return "-";

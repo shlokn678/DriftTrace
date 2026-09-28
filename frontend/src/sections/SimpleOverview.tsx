@@ -17,10 +17,12 @@ interface Props {
  * lives behind View Details.
  */
 export function SimpleOverview({ bundle, report, healthy, ready, activeModel }: Props) {
-  const { modelVersion, driftStatus, rootCause, driftedCount } = bundle;
+  const { driftStatus, rootCause, driftedCount } = bundle;
 
-  const modelName = activeModel?.name ?? "drifttrace-loan-default";
-  const isCustom = activeModel?.is_custom ?? false;
+  const hasActive = activeModel?.active ?? false;
+  const modelName = hasActive ? (activeModel?.name ?? "model") : "None";
+  const modelTask = activeModel?.task ?? null;
+  const depsAvailable = activeModel?.dependencies_available ?? false;
 
   const systemStatus =
     healthy === false
@@ -40,10 +42,11 @@ export function SimpleOverview({ bundle, report, healthy, ready, activeModel }: 
           <MetricCard
             label="Active Model"
             value={<span style={{ fontSize: "1.15rem", wordBreak: "break-word" }}>{modelName}</span>}
+            status={hasActive ? "stable" : "insufficient"}
             sub={
-              isCustom
-                ? "Uploaded model (custom)"
-                : `Default loan model${modelVersion ? ` · v${modelVersion}` : ""}`
+              hasActive
+                ? `${modelTask ?? "model"}${depsAvailable ? " · graph provided" : " · no graph"}`
+                : "Upload a model bundle to begin"
             }
           />
         </div>
@@ -81,9 +84,13 @@ export function SimpleOverview({ bundle, report, healthy, ready, activeModel }: 
               <Pill variant="root" dot>
                 Root cause identified
               </Pill>
-            ) : report ? (
+            ) : hasActive && report && affected.length > 0 ? (
+              <Pill variant="drift" dot>
+                Drift detected
+              </Pill>
+            ) : hasActive && report ? (
               <Pill variant="stable" dot>
-                No root cause
+                Stable
               </Pill>
             ) : (
               <Pill variant="insufficient" dot>
@@ -92,18 +99,27 @@ export function SimpleOverview({ bundle, report, healthy, ready, activeModel }: 
             )}
           </div>
 
-          {!report ? (
+          {!hasActive ? (
             <p className="muted" style={{ maxWidth: 640 }}>
-              No monitoring window has run yet. Run a scenario from the operator controls (in
-              Advanced) to populate a real drift + root-cause result.
+              No model is active. Upload a model bundle below, then activate it to begin
+              monitoring.
+            </p>
+          ) : !report ? (
+            <p className="muted" style={{ maxWidth: 640 }}>
+              No monitoring window has run yet. Send predictions to the active model, or run a
+              drift test (in View Details) to populate a real drift + root-cause result.
+            </p>
+          ) : affected.length === 0 ? (
+            <p className="muted" style={{ maxWidth: 720 }}>
+              No feature has drifted from the reference distribution. Monitoring is active.
             </p>
           ) : rootCause ? (
             <div className="stack stack-4">
               <p className="muted" style={{ maxWidth: 720 }}>
-                DriftTrace traced the drift alarms upstream and flagged{" "}
-                <strong style={{ color: "var(--navy)" }}>{rootCause}</strong> as the earliest
-                drifted node. Downstream nodes are recorded as symptoms - only the root cause
-                is alerted on.
+                DriftTrace traced the drift upstream and flagged{" "}
+                <strong style={{ color: "var(--navy)" }}>{rootCause}</strong> as the likely
+                origin. Downstream nodes are recorded as symptoms - only the root cause is
+                alerted on.
               </p>
               <div className="stack stack-2">
                 <MonoLabel>Affected features</MonoLabel>
@@ -120,10 +136,26 @@ export function SimpleOverview({ bundle, report, healthy, ready, activeModel }: 
               </div>
             </div>
           ) : (
-            <p className="muted" style={{ maxWidth: 720 }}>
-              The latest window shows no drifted node without a drifted ancestor. No root-cause
-              alert was raised.
-            </p>
+            <div className="stack stack-4">
+              <p className="muted" style={{ maxWidth: 720 }}>
+                Drift detected in {affected.length} feature
+                {affected.length === 1 ? "" : "s"}. Likely origin is{" "}
+                <strong style={{ color: "var(--navy)" }}>undetermined</strong>
+                {depsAvailable
+                  ? "."
+                  : " because no dependency graph was provided, so root-cause tracing is unavailable."}
+              </p>
+              <div className="stack stack-2">
+                <MonoLabel>Affected features</MonoLabel>
+                <div className="row row-3 wrap">
+                  {affected.map((n) => (
+                    <span key={n} className="pill pill--drift">
+                      {n}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
           )}
         </BentoCard>
       </section>

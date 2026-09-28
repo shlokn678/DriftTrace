@@ -13,7 +13,7 @@ interface Props {
 
 type Phase = "idle" | "uploading" | "done" | "error";
 
-const ACCEPT = ".pkl,.pickle,.joblib";
+const ACCEPT = ".zip";
 
 /** Human-friendly label for a "missing" info key from the backend. */
 const MISSING_LABEL: Record<string, string> = {
@@ -94,12 +94,13 @@ export function Onboarding({ onReady, onActivated }: Props) {
           <Pill variant="accent">Model-agnostic adapter</Pill>
         </div>
         <h2 id="onboarding-title" style={{ marginBottom: "var(--space-3)" }}>
-          Upload a model to start monitoring
+          Upload a model bundle to start monitoring
         </h2>
         <p className="muted" style={{ marginBottom: "var(--space-5)", maxWidth: 640 }}>
-          Drop one model file. DriftTrace inspects it through the adapter layer, reuses your
-          existing reference data and dependency graph when available, and asks only for what
-          is genuinely missing. Supported formats: {ACCEPT.replace(/,/g, ", ")} (scikit-learn).
+          Drop a bundle <code>.zip</code> containing <strong>model.pkl</strong> and{" "}
+          <strong>reference.csv</strong> (a <strong>graph.json</strong> is optional).
+          DriftTrace inspects the model through the adapter layer and asks only for what is
+          genuinely missing. scikit-learn models are supported.
         </p>
 
         {phase !== "done" && (
@@ -130,10 +131,10 @@ export function Onboarding({ onReady, onActivated }: Props) {
             <div className="stack stack-2 center">
               <strong style={{ color: "var(--navy)" }}>
                 {phase === "uploading"
-                  ? `Inspecting ${fileName ?? "model"}...`
-                  : "Drop a model file or click to browse"}
+                  ? `Inspecting ${fileName ?? "bundle"}...`
+                  : "Drop your model bundle (.zip) or click to browse"}
               </strong>
-              <MonoLabel>{ACCEPT.replace(/,/g, "  /  ")}</MonoLabel>
+              <MonoLabel>model.pkl + reference.csv (+ optional graph.json)</MonoLabel>
             </div>
             <input
               ref={inputRef}

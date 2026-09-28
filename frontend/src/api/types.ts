@@ -26,12 +26,15 @@ export interface ModelInfoResponse {
   loaded: boolean;
 }
 
+export type FeatureValue = number | string;
+
 export interface PredictResponse {
   request_id: string | null;
   model_version: string | null;
-  prediction: number;
-  probability: number;
-  features: Record<string, number>;
+  prediction: number | null;
+  probability: number | null;
+  output: number | null;
+  features: Record<string, FeatureValue>;
   event_emitted: boolean;
 }
 
@@ -129,6 +132,7 @@ export interface RcaLatestResponse {
   available: boolean;
   detail?: string;
   report?: MonitoringReport;
+  dependencies_available?: boolean;
 }
 
 // ---- Explain ----
@@ -148,10 +152,8 @@ export interface Explanation {
   caveat: string;
 }
 
-// ---- Demo scenario ----
-export type ScenarioName = "control" | "income_annual" | "mid_chain" | "two_roots";
-
-export interface ScenarioOutcome {
+// ---- Drift test (generic; perturbs the active model's reference data) ----
+export interface DriftTestOutcome {
   window_id: string;
   drifted_nodes: string[];
   has_root_cause: boolean;
@@ -162,10 +164,12 @@ export interface ScenarioOutcome {
   report_paths: Record<string, string>;
 }
 
-export interface RunScenarioResponse {
-  scenario: ScenarioName;
+export interface DriftTestResponse {
+  intensity: number;
+  feature: string | null;
   windows: number;
-  outcome: ScenarioOutcome | null;
+  dependencies_available: boolean;
+  outcome: DriftTestOutcome | null;
 }
 
 // ---- Metrics ----
@@ -183,6 +187,7 @@ export interface UploadModelResponse {
   features: string[];
   reference_available: boolean;
   dependencies_available: boolean;
+  reference_rows: number | null;
   missing: string[];
   ready_to_monitor: boolean;
   message: string | null;
@@ -203,12 +208,14 @@ export interface ModelStatusResponse {
 }
 
 export interface ActiveModelResponse {
-  is_custom: boolean;
+  active: boolean;
   model_id: string | null;
-  name: string;
+  name: string | null;
   framework: string | null;
   task: string | null;
   model_version: string | null;
   features: string[];
+  dependencies_available: boolean;
+  supports_proba: boolean;
   loaded: boolean;
 }

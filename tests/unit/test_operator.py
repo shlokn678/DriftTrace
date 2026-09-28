@@ -19,7 +19,7 @@ def test_rollback_with_approval_audits(tmp_path) -> None:
     audit = tmp_path / "audit.jsonl"
     result = rollback("2", approved=True, approver="alice", audit_path=audit)
     assert result.ok
-    assert result.detail["to_version"] == "2"
+    assert result.detail["to_model"] == "2"
     entries = read_audit(audit)
     assert len(entries) == 1
     assert entries[0].action == "rollback"

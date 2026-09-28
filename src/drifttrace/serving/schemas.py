@@ -1,54 +1,55 @@
-"""Request/response schemas for the serving API (FR-7)."""
+"""Request/response schemas for the serving API (model-agnostic)."""
 
 from __future__ import annotations
 
+from typing import Union
+
 from pydantic import BaseModel, Field
+
+# A single feature value may be numeric (continuous) or a string label (categorical).
+FeatureValue = Union[float, int, str]
 
 
 class PredictRequest(BaseModel):
     """A single prediction request.
 
-    Only the raw input ``income`` is required; the shared feature transform derives
-    ``credit_score`` and ``risk_score`` so training and serving never diverge (FR-3.3).
-    An optional ``request_id`` supports tracing through the event pipeline.
+    ``features`` maps the active model's feature names to values. The set of features is
+    defined by the active model (from its reference data), not by DriftTrace.
     """
 
-    income: float = Field(..., ge=0, description="Raw monthly income (>= 0)")
+    features: dict[str, FeatureValue] = Field(..., description="feature name -> value")
     request_id: str | None = None
 
 
-class BatchPredictRequest(BaseModel):
-    """A batch of prediction requests."""
-
-    items: list[PredictRequest] = Field(..., min_length=1)
-
-
 class ExplainRequest(BaseModel):
-    """An explanation request (off the prediction hot path, FR-14.4)."""
+    """An explanation request (off the prediction hot path)."""
 
-    income: float = Field(..., ge=0, description="Raw monthly income (>= 0)")
+    features: dict[str, FeatureValue] = Field(..., description="feature name -> value")
     method: str = Field("shap", description="'shap' (primary) or 'lime' (secondary)")
 
 
-class RunScenarioRequest(BaseModel):
-    """Request to run a deterministic drift-injection scenario (FR-18)."""
+class DriftTestRequest(BaseModel):
+    """Run a generic drift test: perturb the active model's reference data and evaluate.
 
-    scenario: str = Field(
-        "control",
-        description="control | income_annual | mid_chain | two_roots",
-    )
-    n: int = Field(300, ge=30, le=5000, description="events to generate")
-    seed: int = Field(7, description="deterministic seed")
+    ``intensity`` scales the injected shift (0 = none, 1 = strong). ``feature`` optionally
+    targets a single feature; when omitted, all numeric features are perturbed.
+    """
+
+    intensity: float = Field(1.0, ge=0.0, le=5.0)
+    feature: str | None = None
+    n: int = Field(300, ge=20, le=5000)
+    seed: int = Field(7)
 
 
 class PredictResponse(BaseModel):
-    """A single prediction response (FR-7 AC-3)."""
+    """A single prediction response."""
 
     request_id: str | None
     model_version: str | None
-    prediction: int
-    probability: float
-    features: dict[str, float]
+    prediction: int | None
+    probability: float | None
+    output: float | None
+    features: dict[str, FeatureValue]
     event_emitted: bool
 
 
@@ -69,13 +70,12 @@ class ModelInfoResponse(BaseModel):
     loaded: bool
 
 
-# ---- Phase 5: model onboarding schemas ------------------------------------------------
+# ---- Model onboarding / activation schemas -------------------------------------------
 class UploadModelResponse(BaseModel):
-    """Result of inspecting an uploaded model file (Phase 5).
+    """Result of inspecting an uploaded model bundle.
 
-    ``supported`` indicates whether DriftTrace can use the model. ``missing`` lists
-    only the information that genuinely could not be determined and must be supplied
-    (e.g. ``reference_data``, ``dependencies``). ``message`` is a user-friendly note.
+    ``missing`` lists only genuinely undeterminable information (e.g. ``dependencies``
+    when no graph.json was provided). ``message`` is a user-friendly note.
     """
 
     model_id: str | None = None
@@ -88,13 +88,14 @@ class UploadModelResponse(BaseModel):
     features: list[str] = Field(default_factory=list)
     reference_available: bool = False
     dependencies_available: bool = False
+    reference_rows: int | None = None
     missing: list[str] = Field(default_factory=list)
     ready_to_monitor: bool = False
     message: str | None = None
 
 
 class ModelStatusResponse(BaseModel):
-    """Registration/onboarding status for a model (Phase 5)."""
+    """Registration/onboarding status for a model."""
 
     model_id: str
     supported: bool
@@ -110,17 +111,15 @@ class ModelStatusResponse(BaseModel):
 
 
 class ActiveModelResponse(BaseModel):
-    """The model currently serving predictions (Phase 5).
+    """The model currently serving predictions, or an explicit no-model state."""
 
-    ``is_custom`` distinguishes an onboarded/activated model from the default loan
-    model that ships with the project and serves as the fallback.
-    """
-
-    is_custom: bool
+    active: bool
     model_id: str | None = None
-    name: str
+    name: str | None = None
     framework: str | None = None
     task: str | None = None
     model_version: str | None = None
     features: list[str] = Field(default_factory=list)
+    dependencies_available: bool = False
+    supports_proba: bool = False
     loaded: bool = False

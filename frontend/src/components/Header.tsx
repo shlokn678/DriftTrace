@@ -6,7 +6,7 @@ import "./Header.css";
 interface HeaderProps {
   healthy: boolean | null;
   ready: boolean | null;
-  modelVersion: string | null;
+  modelName: string | null;
   onRefresh: () => void;
   refreshing: boolean;
   theme: Theme;
@@ -16,7 +16,7 @@ interface HeaderProps {
 export function Header({
   healthy,
   ready,
-  modelVersion,
+  modelName,
   onRefresh,
   refreshing,
   theme,
@@ -51,7 +51,7 @@ export function Header({
           <Pill variant={statusVariant} dot>
             {statusText}
           </Pill>
-          <Pill variant="accent">MODEL v{modelVersion ?? "-"}</Pill>
+          <Pill variant="accent">{modelName ? modelName : "NO MODEL"}</Pill>
           <button
             className="header__icon-btn"
             onClick={onToggleTheme}

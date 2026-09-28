@@ -1,6 +1,6 @@
 import type { MonitoringReport } from "../api/types";
 import { BentoCard, EmptyState, MonoLabel, StatusPill } from "../components/primitives";
-import { formatInt, formatNumber, verdictToStatus, NODE_LABELS } from "../lib/status";
+import { formatInt, formatNumber, nodeLabel, verdictToStatus } from "../lib/status";
 
 interface Props {
   report: MonitoringReport | null;
@@ -23,7 +23,7 @@ export function DriftMetrics({ report }: Props) {
 
       {!report ? (
         <BentoCard>
-          <EmptyState title="No diagnostics yet" hint="Run a scenario to compute KS/PSI." />
+          <EmptyState title="No diagnostics yet" hint="Run a drift test to compute KS/PSI." />
         </BentoCard>
       ) : (
         <div className="bento">
@@ -35,7 +35,7 @@ export function DriftMetrics({ report }: Props) {
               <BentoCard className="col-4" key={n.node} interactive>
                 <div className="card__head">
                   <span className="mono-value" style={{ fontWeight: 700, color: "var(--navy)" }}>
-                    {NODE_LABELS[n.node] ?? n.node}
+                    {nodeLabel(n.node)}
                   </span>
                   <StatusPill status={status} />
                 </div>
