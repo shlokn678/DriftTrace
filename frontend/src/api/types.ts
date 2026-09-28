@@ -170,3 +170,33 @@ export interface RunScenarioResponse {
 
 // ---- Metrics ----
 export type Metrics = Record<string, number>;
+
+// ---- Phase 5: model onboarding ----
+export interface UploadModelResponse {
+  model_id: string | null;
+  supported: boolean;
+  framework: string | null;
+  name: string | null;
+  task: string | null;
+  n_features: number | null;
+  supports_proba: boolean;
+  features: string[];
+  reference_available: boolean;
+  dependencies_available: boolean;
+  missing: string[];
+  ready_to_monitor: boolean;
+  message: string | null;
+}
+
+export interface ModelStatusResponse {
+  model_id: string;
+  supported: boolean;
+  framework: string | null;
+  name: string | null;
+  task: string | null;
+  n_features: number | null;
+  reference_available: boolean;
+  dependencies_available: boolean;
+  ready_to_monitor: boolean;
+  message: string | null;
+}

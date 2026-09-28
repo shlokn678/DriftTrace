@@ -67,3 +67,42 @@ class ModelInfoResponse(BaseModel):
     model_name: str
     features: list[str]
     loaded: bool
+
+
+# ---- Phase 5: model onboarding schemas ------------------------------------------------
+class UploadModelResponse(BaseModel):
+    """Result of inspecting an uploaded model file (Phase 5).
+
+    ``supported`` indicates whether DriftTrace can use the model. ``missing`` lists
+    only the information that genuinely could not be determined and must be supplied
+    (e.g. ``reference_data``, ``dependencies``). ``message`` is a user-friendly note.
+    """
+
+    model_id: str | None = None
+    supported: bool
+    framework: str | None = None
+    name: str | None = None
+    task: str | None = None
+    n_features: int | None = None
+    supports_proba: bool = False
+    features: list[str] = Field(default_factory=list)
+    reference_available: bool = False
+    dependencies_available: bool = False
+    missing: list[str] = Field(default_factory=list)
+    ready_to_monitor: bool = False
+    message: str | None = None
+
+
+class ModelStatusResponse(BaseModel):
+    """Registration/onboarding status for a model (Phase 5)."""
+
+    model_id: str
+    supported: bool
+    framework: str | None = None
+    name: str | None = None
+    task: str | None = None
+    n_features: int | None = None
+    reference_available: bool = False
+    dependencies_available: bool = False
+    ready_to_monitor: bool = False
+    message: str | None = None

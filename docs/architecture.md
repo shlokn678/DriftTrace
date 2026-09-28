@@ -6,6 +6,10 @@ finalized diagrams and interfaces as implementation proceeds.
 
 ## Summary
 - Core libraries (drift, graph, RCA) are pure, deterministic, and broker-free.
+- A model plugs in through a **model adapter** (`src/drifttrace/adapters/`) that emits
+  standardized prediction events; the core never sees model internals. The MVP ships one
+  adapter (scikit-learn). Flow: `model → adapter → standardized events → core → KS/PSI →
+  graph + RCA → alerts/reports/explanations`.
 - Airflow, Kafka/Redpanda, FastAPI, and Docker are thin adapters over the core.
 - Monitoring is asynchronous; prediction latency never depends on drift computation.
 - The dependency graph is declared in `config/graph.yaml` and loaded into NetworkX.

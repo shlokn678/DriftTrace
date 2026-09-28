@@ -75,3 +75,61 @@
 .sys-counter {
   padding: var(--space-3) 0;
 }
+
+/* Onboarding (Phase 5) */
+.onboard-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-8) var(--space-6);
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-card);
+  background: var(--bg);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.onboard-drop:hover,
+.onboard-drop:focus-visible,
+.onboard-drop--active {
+  border-color: var(--accent);
+  background: var(--accent-surface);
+  outline: none;
+}
+
+.onboard-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  align-items: flex-start;
+}
+.onboard-result--ok { border-color: var(--status-stable); background: var(--status-stable-surface); }
+.onboard-result--warn { border-color: var(--status-warning); background: var(--status-warning-surface); }
+.onboard-result--bad { border-color: var(--status-drift); background: var(--status-drift-surface); }
+
+.onboard-missing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--bg);
+}
+.onboard-missing__list {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.stack-5 { gap: var(--space-5); }

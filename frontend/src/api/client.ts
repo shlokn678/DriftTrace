@@ -9,11 +9,13 @@ import type {
   HealthResponse,
   Metrics,
   ModelInfoResponse,
+  ModelStatusResponse,
   PredictResponse,
   RcaLatestResponse,
   ReadyResponse,
   RunScenarioResponse,
   ScenarioName,
+  UploadModelResponse,
 } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "/api";
@@ -59,6 +61,32 @@ async function requestText(path: string): Promise<string> {
   return resp.text();
 }
 
+/**
+ * POST multipart/form-data. Do NOT set Content-Type manually - the browser sets
+ * it with the correct boundary. Used for model file upload.
+ */
+async function requestMultipart<T>(path: string, form: FormData): Promise<T> {
+  let resp: Response;
+  try {
+    resp = await fetch(`${BASE}${path}`, { method: "POST", body: form });
+  } catch (err) {
+    throw new ApiError(
+      `Network error contacting the DriftTrace API (${(err as Error).message})`,
+    );
+  }
+  if (!resp.ok) {
+    let detail = `${resp.status} ${resp.statusText}`;
+    try {
+      const body = await resp.json();
+      if (body?.detail) detail = typeof body.detail === "string" ? body.detail : detail;
+    } catch {
+      /* ignore parse errors */
+    }
+    throw new ApiError(detail, resp.status);
+  }
+  return (await resp.json()) as T;
+}
+
 /** Parse Prometheus-style text exposition into a flat name->value map. */
 function parseMetrics(text: string): Metrics {
   const out: Metrics = {};
@@ -95,4 +123,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ scenario, n, seed }),
     }),
+  // ---- Phase 5: model onboarding ----
+  uploadModel: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestMultipart<UploadModelResponse>("/models/upload", form);
+  },
+  modelStatus: (modelId: string) =>
+    request<ModelStatusResponse>(`/models/${encodeURIComponent(modelId)}`),
 };

@@ -119,8 +119,47 @@ and reports:
 Rather than treating the three as separate alerts, it traces the drift upstream and
 identifies `income` as the single root cause, with the others as downstream symptoms.
 
+## Model-agnostic design
+
+DriftTrace separates *model-specific prediction* from the *monitoring and root-cause
+engine*. A model plugs in through a thin **adapter** that turns its raw inputs and outputs
+into standardized prediction events; the drift, dependency-graph, and RCA core never sees
+model internals.
+
+```
+USER MODEL → MODEL ADAPTER → STANDARDIZED PREDICTION EVENTS
+          → DRIFTTRACE CORE → KS / PSI → DEPENDENCY GRAPH + RCA
+          → ALERTS / REPORTS / EXPLANATIONS
+```
+
+The adapter layer lives in `src/drifttrace/adapters/` (`base`, `sklearn_adapter`,
+`registry`). The MVP ships **one** adapter — **scikit-learn** — and the boundary is
+designed so additional frameworks can be added without touching the core.
+
+## Model onboarding
+
+Upload one model file; DriftTrace inspects it and asks only for what it cannot detect.
+
+1. **Upload** a model file (`.pkl`, `.pickle`, `.joblib`) — drag-and-drop or browse in the
+   dashboard, or `POST /models/upload`.
+2. **Inspect** — DriftTrace detects the framework, name, task, features, and whether the
+   model exposes probabilities.
+3. **Reference data** — reused automatically when a baseline already exists; requested only
+   if missing.
+4. **Dependency graph** — reused/detected from `config/graph.yaml`; requested only if
+   missing. Missing dependencies do not block monitoring, they only limit upstream RCA.
+5. **Start monitoring** — when the model is supported and a reference exists, it is marked
+   **ready to monitor**. Nothing is fabricated.
+
+The dashboard opens on a **simplified view** — model, system status, drift status, root
+cause, and affected features — with KS/PSI evidence, the dependency graph, SHAP/LIME, the
+operator console, and system health available behind **View details**.
+
 ## Current implementation
 
+- [x] Model-agnostic adapter layer (scikit-learn adapter)
+- [x] Minimal-input model onboarding (upload → inspect → ready)
+- [x] Simplified dashboard with progressive disclosure
 - [x] Data generation and validation
 - [x] DVC data versioning
 - [x] Model training and evaluation
@@ -139,6 +178,7 @@ identifies `income` as the single root cause, with the others as downstream symp
 ## Current scope
 
 - The current demo uses a **synthetic loan-default dataset**.
-- The current MVP uses a **scikit-learn classifier**.
+- The monitoring/RCA core is **model-agnostic** through the adapter layer; the only
+  implemented adapter is **scikit-learn**.
 - The current dependency graph is `income → credit_score → risk_score → prediction`.
 - **Prometheus/Grafana** and **AWS SageMaker** are **not** part of the implemented MVP.

@@ -1,11 +1,14 @@
 import { useCallback, useMemo, useState } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { api } from "./api/client";
 import { useAsync } from "./hooks/useAsync";
 import { useTheme } from "./lib/theme";
 import { deriveBundle } from "./lib/derive";
 import { Header } from "./components/Header";
 import { Hero } from "./components/Hero";
-import { KpiBento } from "./sections/KpiBento";
+import { Button } from "./components/primitives";
+import { Onboarding } from "./sections/Onboarding";
+import { SimpleOverview } from "./sections/SimpleOverview";
 import { RcaSection } from "./sections/RcaSection";
 import { DriftMetrics } from "./sections/DriftMetrics";
 import { IncidentCard } from "./sections/IncidentCard";
@@ -18,6 +21,7 @@ export default function App() {
   const [nonce, setNonce] = useState(0);
   const bump = useCallback(() => setNonce((n) => n + 1), []);
   const { theme, toggle: toggleTheme } = useTheme();
+  const [advanced, setAdvanced] = useState(false);
 
   const health = useAsync(() => api.health(), [nonce], { pollMs: 15000 });
   const ready = useAsync(() => api.ready(), [nonce], { pollMs: 15000 });
@@ -38,10 +42,12 @@ export default function App() {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
+  const healthy = health.error ? false : health.data ? true : null;
+
   return (
     <div className="shell">
       <Header
-        healthy={health.error ? false : health.data ? true : null}
+        healthy={healthy}
         ready={ready.data?.ready ?? null}
         modelVersion={bundle.modelVersion}
         onRefresh={bump}
@@ -53,33 +59,66 @@ export default function App() {
       <main className="container" style={{ paddingBottom: "var(--space-8)" }}>
         <Hero />
 
-        <KpiBento bundle={bundle} />
+        {/* Simplified default view: model, system status, drift status, root cause, affected features. */}
+        <SimpleOverview
+          bundle={bundle}
+          report={report}
+          healthy={healthy}
+          ready={ready.data?.ready ?? null}
+        />
 
-        <RcaSection report={report} />
+        {/* Onboard a model with minimal input. */}
+        <Onboarding onReady={bump} />
 
-        <section className="section bento">
-          <IncidentCard report={report} />
-          <ExplanationPanel />
+        {/* Progressive disclosure: everything technical lives behind Advanced. */}
+        <section className="section" aria-label="Advanced details toggle">
+          <Button
+            variant={advanced ? "ghost" : "primary"}
+            onClick={() => setAdvanced((v) => !v)}
+            ariaLabel={advanced ? "Hide advanced details" : "Show advanced details"}
+          >
+            {advanced ? (
+              <>
+                <ChevronUp size={16} aria-hidden /> Hide advanced details
+              </>
+            ) : (
+              <>
+                <ChevronDown size={16} aria-hidden /> View details (KS/PSI, graph, SHAP/LIME,
+                operator, health)
+              </>
+            )}
+          </Button>
         </section>
 
-        <DriftMetrics report={report} />
+        {advanced && (
+          <div className="stack stack-5">
+            <RcaSection report={report} />
 
-        <section className="section bento">
-          <OperatorActions
-            onScenarioComplete={bump}
-            onViewRca={scrollTo("rca")}
-            onExplain={scrollTo("diagnostics")}
-          />
-        </section>
+            <section className="section bento">
+              <IncidentCard report={report} />
+              <ExplanationPanel />
+            </section>
 
-        <section className="section bento">
-          <SystemHealth
-            health={health.data}
-            ready={ready.data}
-            modelInfo={modelInfo.data}
-            metrics={metrics.data}
-          />
-        </section>
+            <DriftMetrics report={report} />
+
+            <section className="section bento">
+              <OperatorActions
+                onScenarioComplete={bump}
+                onViewRca={scrollTo("rca")}
+                onExplain={scrollTo("diagnostics")}
+              />
+            </section>
+
+            <section className="section bento">
+              <SystemHealth
+                health={health.data}
+                ready={ready.data}
+                modelInfo={modelInfo.data}
+                metrics={metrics.data}
+              />
+            </section>
+          </div>
+        )}
 
         <footer className="site-footer">
           <span className="mono-label">DriftTrace</span>
