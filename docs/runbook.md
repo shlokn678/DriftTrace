@@ -1,214 +1,198 @@
 # DriftTrace — Runbook
 
-How to run the DriftTrace stack locally. No cloud accounts or credentials are required.
+How to run DriftTrace locally. **No Docker, no message broker, and no cloud accounts
+or credentials are required.** The backend runs in a Python virtualenv; the dashboard
+runs with Node/Vite.
 
-- Phases 0-2 (pipeline, training, DAG, CI) run with the local Python environment.
-- Phase 3 (serving + streaming infrastructure) runs via Docker Compose.
-
-## Prerequisites
-- Docker Desktop running (engine reachable: `docker info`).
-- For the pure-Python path: the project virtualenv at `.venv` with extras installed:
-  `python -m pip install -e ".[dev,tracking,serving,streaming]"`.
-
-All commands below are run from the repository root. On Windows use PowerShell.
+All commands are run from the repository root. Windows examples use PowerShell; the
+`.\.venv\Scripts\python.exe` prefix becomes `./.venv/bin/python` on Linux/macOS.
 
 ---
 
-## 1. Build the image
-```
-docker build -f docker/Dockerfile -t drifttrace:latest .
+## 0. One-time setup (fresh clone)
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1
 ```
 
-## 2. Start the Phase 3 stack
+This creates `.venv`, installs the project with the `serving,tracking,streaming`
+extras, and runs the bootstrap (dataset + schema validation + trained/registered model
++ drift baseline). Cross-platform equivalent:
 
-### core profile (lightweight: init + mlflow + api + webhook-stub)
-The `init` service trains and registers the model into a shared volume (using the
-existing Phase 1 pipeline and the same model), then the API loads it.
-```
-docker compose -f docker/docker-compose.yml --profile core up -d
-```
-
-### full profile (adds Redpanda + monitor for streaming end-to-end)
-```
-$env:DRIFTTRACE_USE_REDPANDA = "true"   # PowerShell; API emits events to Redpanda
-docker compose -f docker/docker-compose.yml --profile full up -d
+```powershell
+.\.venv\Scripts\python.exe -m drifttrace.bootstrap          # reuse existing state
+.\.venv\Scripts\python.exe -m drifttrace.bootstrap --force  # rebuild from scratch
 ```
 
-### stretch profile
-Reserved for Prometheus/Grafana (Phase 4 / stretch); not built in Phase 3.
+Prerequisites: **Python 3.11+**, **Node.js/npm** (dashboard only), **Git**.
+
+---
+
+## 1. Start the backend API
+
+```powershell
+.\.venv\Scripts\python.exe -m drifttrace.cli.main serve --host 127.0.0.1 --port 8000
+```
+
+The API loads the registered model at startup and stays up (reporting non-ready) if no
+model is present - re-run the bootstrap in that case.
+
+## 2. Start the dashboard (second terminal)
+
+```powershell
+cd frontend
+npm install      # first time only
+npm run dev
+```
+
+Dashboard: http://localhost:5173. API: http://localhost:8000.
 
 ## 3. Verify the API
 
-### health / readiness
-```
-curl http://localhost:8000/health      # {"status":"ok"}
-curl http://localhost:8000/ready        # {"ready":true,"model_version":"1",...}
-curl http://localhost:8000/model-info   # model name + features + loaded
+```powershell
+curl.exe http://localhost:8000/health        # {"status":"ok"}
+curl.exe http://localhost:8000/ready          # {"ready":true,"model_version":"...",...}
+curl.exe http://localhost:8000/model-info     # model name + features + loaded
+curl.exe http://localhost:8000/models/active  # active model (custom or default loan)
 ```
 
-### make a prediction
-```
-curl -X POST http://localhost:8000/predict `
+Make a prediction:
+
+```powershell
+curl.exe -X POST http://localhost:8000/predict `
   -H "Content-Type: application/json" `
-  -d '{"income": 4200.0, "request_id": "demo-1"}'
+  -d '{\"income\": 4200.0, \"request_id\": \"demo-1\"}'
 ```
+
 The response includes `prediction`, `probability`, derived `features`, the serving
-`model_version`, and `event_emitted: true`.
-
-### verify a prediction event was emitted
-- core profile (file sink):
-  ```
-  docker exec drifttrace-api-1 sh -c "tail -n 1 /store/reports/events.jsonl"
-  ```
-- full profile (Redpanda): events are produced to the `drifttrace.predictions` topic;
-  the monitor consumes them (next step).
-
-## 4. Deterministic demo / replay (normal + simulated drift)
-
-The replay path proves the infrastructure carries BOTH normal and simulated-drift
-events through: sample events -> event source -> monitor/window -> webhook stub.
-Simulated drift is demo input only; NO drift detection is performed (that is Phase 4).
-
-Generate the deterministic event files and replay them (pure-Python, broker-free):
-```
-python -m drifttrace.cli.main demo-generate --out reports/demo --n 200 --seed 7
-python -m drifttrace.cli.main replay --file reports/demo/events_normal.jsonl `
-  --webhook-url http://localhost:9000/alert --window-size 50 --min-samples 10
-python -m drifttrace.cli.main replay --file reports/demo/events_drift.jsonl `
-  --webhook-url http://localhost:9000/alert --window-size 50 --min-samples 10
-```
-
-## 5. Verify the monitor processed events (full profile, via Redpanda)
-After making predictions with the full profile, run the monitor as a one-shot to
-consume from Redpanda, window the events, and notify the webhook stub:
-```
-docker compose -f docker/docker-compose.yml --profile full run --rm monitor `
-  monitor --window-size 50 --min-samples 10 --limit 500
-```
-The output reports `windows_processed` and `notifications_sent`.
-
-## 6. Verify the webhook stub received events
-```
-curl http://localhost:9000/count       # {"count": N}
-curl http://localhost:9000/received     # full list of received window summaries
-```
-
-## 7. View logs
-```
-docker compose -f docker/docker-compose.yml --profile full logs           # all
-docker compose -f docker/docker-compose.yml --profile full logs api        # one service
-docker logs drifttrace-monitor-1
-```
-
-## 8. Stop the stack
-```
-docker compose -f docker/docker-compose.yml --profile core --profile full down
-```
-
-## 9. Clean up containers + volumes
-```
-docker compose -f docker/docker-compose.yml --profile core --profile full down -v
-```
-The `-v` flag also removes the `model-store` volume (the trained model + MLflow store);
-the next `up` re-runs `init` to retrain deterministically.
+`model_version`, and `event_emitted: true`. Prediction events are appended to a local
+JSON-lines file (`reports/events.jsonl` by default) - no broker involved.
 
 ---
 
-## MLflow UI
-With the stack up, the MLflow tracking/registry UI is at http://localhost:5000.
+## 4. Model onboarding + activation
+
+```powershell
+# Upload one model file (.pkl / .pickle / .joblib); DriftTrace inspects it
+curl.exe -F "file=@model.pkl" http://localhost:8000/models/upload
+
+# Activate the returned model id ("Use this model") - /predict now serves it
+curl.exe -X POST http://localhost:8000/models/<model_id>/activate
+
+# Restore the default loan model
+curl.exe -X POST http://localhost:8000/models/deactivate
+```
+
+In the dashboard, use **Add Model** (drag/drop or browse), then **Use this model**.
+The default loan model is always the fallback. Reference data and the dependency graph
+are reused automatically; only genuinely missing information is requested.
+
+---
+
+## 5. Drift demo -> RCA (real Phase 4 pipeline, broker-free)
+
+The simplest path runs a deterministic scenario in-process through the exact drift ->
+RCA -> report -> alert pipeline and writes `reports/latest_rca.json`:
+
+```powershell
+# Main pitch demo: monthly -> annual income. Expect income = ROOT CAUSE;
+# credit_score + risk_score = SYMPTOMS; exactly one alert.
+curl.exe -X POST http://localhost:8000/demo/run-scenario `
+  -H "Content-Type: application/json" `
+  -d '{\"scenario\": \"income_annual\", \"n\": 300, \"seed\": 7}'
+```
+
+Scenarios: `control` (no drift), `income_annual` (income root), `mid_chain`
+(credit_score root), `two_roots`. List them: `curl.exe http://localhost:8000/demo/scenarios`.
+
+### CLI equivalent (file replay, no broker)
+
+```powershell
+.\.venv\Scripts\python.exe -m drifttrace.cli.main demo-generate --out reports\demo --n 300 --seed 7
+.\.venv\Scripts\python.exe -m drifttrace.cli.main replay --file reports\demo\events_income_annual.jsonl `
+  --window-size 300 --min-samples 30
+```
+
+Add `--webhook-url http://localhost:9000/alert` if you are running the local webhook
+stub (`... webhook-stub --port 9000`) and want to see alert delivery.
+
+## 6. Check drift results / RCA / reports / alerts
+
+```powershell
+curl.exe http://localhost:8000/rca/latest          # latest persisted RCA report
+Get-Content reports\latest_rca.json                 # same report on disk
+Get-Content reports\alerts.jsonl                    # emitted alerts (root-cause only)
+```
+
+Or open the dashboard: the simple view shows the root cause and affected features; KS/PSI
+evidence and the dependency graph are under **View Details**.
+
+---
+
+## 7. Explainability (SHAP / LIME), off the prediction hot path
+
+```powershell
+curl.exe -X POST http://localhost:8000/explain -H "Content-Type: application/json" -d '{\"income\": 4200.0, \"method\": \"shap\"}'
+curl.exe -X POST http://localhost:8000/explain -H "Content-Type: application/json" -d '{\"income\": 4200.0, \"method\": \"lime\"}'
+# CLI:
+.\.venv\Scripts\python.exe -m drifttrace.cli.main explain --income 4200 --method shap
+```
+
+## 8. Governance (fairness + privacy)
+
+```powershell
+.\.venv\Scripts\python.exe -m drifttrace.cli.main governance
+```
+
+## 9. Operator actions (approval required; audited)
+
+```powershell
+# Rejected without approval (exit code 2):
+.\.venv\Scripts\python.exe -m drifttrace.cli.main rollback --to-version 1
+# Approved (audited):
+.\.venv\Scripts\python.exe -m drifttrace.cli.main rollback --to-version 1 --approve --approver alice
+# Retrain requires approval too:
+.\.venv\Scripts\python.exe -m drifttrace.cli.main retrain --approve --approver alice
+Get-Content reports\audit_log.jsonl                 # audit trail
+```
+
+## 10. Metrics (Prometheus-compatible text; no Prometheus/Grafana installed)
+
+```powershell
+curl.exe http://localhost:8000/metrics
+```
+
+---
+
+## MLflow UI (optional)
+
+MLflow uses a local SQLite backend by default (`mlflow.db` in the repo root). To browse
+runs and the model registry:
+
+```powershell
+.\.venv\Scripts\python.exe -m mlflow ui --backend-store-uri "sqlite:///mlflow.db"
+```
+
+Then open http://localhost:5000.
+
+## Optional: Redpanda streaming (not required)
+
+The normal workflow is broker-free. If you separately run a Redpanda/Kafka broker, set
+`DRIFTTRACE_USE_REDPANDA=true` (and `REDPANDA_BROKER`) so the API emits events to a topic,
+and run the monitor against it: `... monitor --brokers localhost:9092 --limit 500`.
+This is entirely optional and outside the default demo.
 
 ## Notes
-- The MVP API is unauthenticated and intended for localhost / the internal Compose
-  network only (FR-7.6). Do not expose it publicly as-is.
-- The MLflow server image is pinned to match the client version so the shared SQLite
-  store migrates cleanly.
 
+- The MVP API is unauthenticated and intended for localhost / internal use only
+  (FR-7.6). Do not expose it publicly as-is.
+- Runtime state (`data/`, `artifacts/`, `reports/`, `mlflow.db`) is git-ignored and fully
+  reconstructed by the bootstrap - never copy it between machines.
 
----
+## Troubleshooting
 
-# Phase 4 — Drift detection, RCA, alerting (Operate)
-
-Phase 4 turns the Phase 3 infrastructure into the real DriftTrace intelligence:
-`prediction events -> window -> KS+PSI drift -> per-node verdicts -> declared graph ->
-RCA -> root-cause-only alert -> monitoring report -> operator decision`.
-
-Prometheus/Grafana are deferred (stretch); only a `/metrics` endpoint is provided.
-
-## Start the Phase 4 stack
-```
-docker build -f docker/Dockerfile -t drifttrace:latest .
-$env:DRIFTTRACE_USE_REDPANDA = "true"     # full profile emits events to Redpanda
-docker compose -f docker/docker-compose.yml --profile full up -d
-```
-`init` trains + registers the model into the shared volume; `api`, `redpanda`,
-`webhook-stub`, and `monitor` then start.
-
-## Generate the deterministic scenarios (inside the api container)
-```
-docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 `
-  python -m drifttrace.cli.main demo-generate --out /store/reports/demo --n 300 --seed 7
-```
-This writes `events_control.jsonl`, `events_income_annual.jsonl`,
-`events_mid_chain.jsonl`, `events_two_roots.jsonl`.
-
-## Run monitoring on a scenario (drift -> RCA -> report -> alert)
-```
-# Control (expect: no drift, no root cause, no alert)
-docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main `
-  replay --file /store/reports/demo/events_control.jsonl `
-  --webhook-url http://webhook-stub:9000/alert --window-size 300 --min-samples 30
-
-# Main pitch demo: monthly -> annual income (expect: income = root cause; one alert)
-docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main `
-  replay --file /store/reports/demo/events_income_annual.jsonl `
-  --webhook-url http://webhook-stub:9000/alert --window-size 300 --min-samples 30
-
-# Mid-chain drift (expect: credit_score = root cause)
-docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main `
-  replay --file /store/reports/demo/events_mid_chain.jsonl `
-  --webhook-url http://webhook-stub:9000/alert --window-size 300 --min-samples 30
-```
-
-## Check drift results / RCA / reports / alerts
-```
-curl http://localhost:8000/rca/latest                 # latest persisted RCA report
-docker exec drifttrace-api-1 sh -c "ls /store/reports/*.md | head -1 | xargs cat"  # a report
-docker exec drifttrace-api-1 sh -c "cat /store/reports/alerts.jsonl"               # alerts
-curl http://localhost:9000/count                       # webhook stub receipts
-curl http://localhost:9000/received                    # received alert payloads
-```
-
-## Explainability (SHAP / LIME), off the prediction hot path
-```
-curl -X POST http://localhost:8000/explain -H "Content-Type: application/json" -d '{"income": 4200.0, "method": "shap"}'
-curl -X POST http://localhost:8000/explain -H "Content-Type: application/json" -d '{"income": 4200.0, "method": "lime"}'
-# or via the CLI:
-docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main explain --income 4200 --method shap
-```
-
-## Governance (fairness + privacy)
-```
-docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main governance
-```
-
-## Operator actions (approval required; audited)
-```
-# Rejected without approval (exit code 2):
-docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main rollback --to-version 1
-# Approved (audited):
-docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main rollback --to-version 1 --approve --approver alice
-# Retrain requires approval too:
-docker exec -e DRIFTTRACE_ROOT=/store drifttrace-api-1 python -m drifttrace.cli.main retrain --approve --approver alice
-docker exec drifttrace-api-1 sh -c "cat /store/reports/audit_log.jsonl"   # audit trail
-```
-
-## Metrics (Prometheus-compatible; no Prometheus/Grafana installed)
-```
-curl http://localhost:8000/metrics
-```
-
-## Stop / clean up
-```
-docker compose -f docker/docker-compose.yml --profile core --profile full down
-docker compose -f docker/docker-compose.yml --profile core --profile full down -v   # also removes model-store
-```
+- **`/ready` is false** - no model loaded; run `python -m drifttrace.bootstrap`.
+- **`Python 3.11+ is required`** - install Python 3.11+; `setup.ps1` uses the `py`
+  launcher automatically when available.
+- **Dashboard shows data as unavailable** - the API is not reachable on port 8000.
+- **Reset everything** - `scripts\setup.ps1 -Force` regenerates the dataset + model.

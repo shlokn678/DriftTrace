@@ -52,7 +52,7 @@ jobs:
         run: python -m mypy
 
       - name: Unit + schema tests
-        # The full suite is broker-free / Airflow-free / Docker-free (NFR-8).
+        # The full suite is broker-free and Airflow-free (NFR-8). No Docker.
         # Schema validation tests are part of tests/unit (FR-2, FR-16.1).
         env:
           MLFLOW_DISABLE_AGENT_HINT: "1"
@@ -63,47 +63,28 @@ jobs:
         # clearly named CI failure, as required by FR-2.1 / FR-16.1.
         run: python -m pytest tests/unit/test_schema_validate.py -q
 
-  docker:
-    name: Docker build + Compose validation + smoke test
+  bootstrap:
+    name: Fresh-clone bootstrap + API smoke test
     runs-on: ubuntu-latest
-    # Credential-free: no registry login, no secrets, no cloud. The image is built
-    # and exercised locally on the runner only (FR-16.3, NFR-7).
+    # Local-first: no Docker, no broker, no cloud, no secrets. Reconstructs runtime
+    # state from tracked files with the deterministic pipeline, then exercises the API.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build the project image
-        run: docker build -f docker/Dockerfile -t drifttrace:ci .
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
 
-      - name: Validate Compose configuration (core + full)
+      - name: Install package (serving + tracking extras)
         run: |
-          docker compose -f docker/docker-compose.yml --profile core config --quiet
-          docker compose -f docker/docker-compose.yml --profile full config --quiet
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[tracking,serving,streaming]"
 
-      - name: Compose smoke test (core profile)
-        # Bring up the core profile (init trains the model into a shared volume, then
-        # api + webhook-stub start). Verify the API health/readiness and one prediction,
-        # and confirm the prediction emitted an event. Broker-free.
-        run: |
-          set -euo pipefail
-          docker tag drifttrace:ci drifttrace:latest
-          docker compose -f docker/docker-compose.yml --profile core up -d --wait --wait-timeout 240
-          echo "== health =="
-          curl -fsS http://localhost:8000/health
-          echo "== ready =="
-          curl -fsS http://localhost:8000/ready
-          echo "== predict =="
-          curl -fsS -X POST http://localhost:8000/predict \
-            -H "Content-Type: application/json" \
-            -d '{"income": 4200.0, "request_id": "ci-1"}' | tee /tmp/predict.json
-          grep -q '"event_emitted":true' /tmp/predict.json
-          echo "== webhook stub health =="
-          curl -fsS http://localhost:9000/health
+      - name: Bootstrap runtime state (dataset + baseline + trained/registered model)
+        run: python -m drifttrace.bootstrap
 
-      - name: Compose logs on failure
-        if: failure()
-        run: docker compose -f docker/docker-compose.yml --profile core logs
-
-      - name: Tear down
-        if: always()
-        run: docker compose -f docker/docker-compose.yml --profile core --profile full down -v
+      - name: API smoke test (health / ready / predict / income_annual drift / RCA)
+        run: python scripts/smoke_api.py

@@ -26,13 +26,20 @@ def _repo_root() -> Path:
 
 @dataclass(frozen=True)
 class Paths:
-    """Canonical project paths."""
+    """Canonical project paths.
+
+    All paths derive from :attr:`root`, which defaults to the repository root and is
+    overridable via ``DRIFTTRACE_ROOT``. Nothing here depends on an absolute
+    developer-machine path, so the project works when copied to another directory
+    (NFR-4 portability).
+    """
 
     root: Path
     config: Path
     data: Path
     artifacts: Path
     reports: Path
+    model_store: Path
 
     @property
     def graph_yaml(self) -> Path:
@@ -52,14 +59,26 @@ class Paths:
 
 
 def get_paths() -> Paths:
-    """Build the canonical :class:`Paths`, allowing a ``DRIFTTRACE_ROOT`` override."""
+    """Build the canonical :class:`Paths`.
+
+    ``DRIFTTRACE_ROOT`` overrides the project root; individual directories can be
+    overridden independently via ``DRIFTTRACE_DATA_DIR``, ``DRIFTTRACE_ARTIFACTS_DIR``,
+    ``DRIFTTRACE_REPORTS_DIR`` and ``DRIFTTRACE_MODEL_STORE``. All defaults are relative
+    to the resolved root, so a copied/cloned checkout works with no configuration.
+    """
     root = Path(os.environ.get("DRIFTTRACE_ROOT", str(_repo_root()))).resolve()
+
+    def _dir(env: str, default: Path) -> Path:
+        val = os.environ.get(env)
+        return Path(val).resolve() if val else default
+
     return Paths(
         root=root,
-        config=root / "config",
-        data=root / "data",
-        artifacts=root / "artifacts",
-        reports=root / "reports",
+        config=_dir("DRIFTTRACE_CONFIG_DIR", root / "config"),
+        data=_dir("DRIFTTRACE_DATA_DIR", root / "data"),
+        artifacts=_dir("DRIFTTRACE_ARTIFACTS_DIR", root / "artifacts"),
+        reports=_dir("DRIFTTRACE_REPORTS_DIR", root / "reports"),
+        model_store=_dir("DRIFTTRACE_MODEL_STORE", root / "artifacts" / "uploaded_models"),
     )
 
 

@@ -26,6 +26,7 @@ export default function App() {
   const health = useAsync(() => api.health(), [nonce], { pollMs: 15000 });
   const ready = useAsync(() => api.ready(), [nonce], { pollMs: 15000 });
   const modelInfo = useAsync(() => api.modelInfo(), [nonce]);
+  const activeModel = useAsync(() => api.activeModel(), [nonce]);
   const rca = useAsync(() => api.rcaLatest(), [nonce]);
   const metrics = useAsync(() => api.metrics(), [nonce], { pollMs: 15000 });
 
@@ -36,7 +37,12 @@ export default function App() {
   );
 
   const refreshing =
-    health.loading || ready.loading || modelInfo.loading || rca.loading || metrics.loading;
+    health.loading ||
+    ready.loading ||
+    modelInfo.loading ||
+    activeModel.loading ||
+    rca.loading ||
+    metrics.loading;
 
   const scrollTo = (id: string) => () => {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -65,10 +71,11 @@ export default function App() {
           report={report}
           healthy={healthy}
           ready={ready.data?.ready ?? null}
+          activeModel={activeModel.data}
         />
 
-        {/* Onboard a model with minimal input. */}
-        <Onboarding onReady={bump} />
+        {/* Onboard a model with minimal input, then activate it ("Use this model"). */}
+        <Onboarding onReady={bump} onActivated={bump} />
 
         {/* Progressive disclosure: everything technical lives behind Advanced. */}
         <section className="section" aria-label="Advanced details toggle">

@@ -1,4 +1,4 @@
-import type { MonitoringReport } from "../api/types";
+import type { ActiveModelResponse, MonitoringReport } from "../api/types";
 import type { MetricsBundle } from "../lib/derive";
 import { BentoCard, MetricCard, MonoLabel, Pill } from "../components/primitives";
 
@@ -7,15 +7,20 @@ interface Props {
   report: MonitoringReport | null;
   healthy: boolean | null;
   ready: boolean | null;
+  activeModel: ActiveModelResponse | null;
 }
 
 /**
- * The default, minimal-input operator view (Phase 5). Answers the only five questions
- * a normal user needs at a glance: which model, is the system up, is there drift, what is
- * the root cause, and which features are affected. Everything else lives behind Advanced.
+ * The default, minimal-input operator view (Phase 5). Answers the only questions a
+ * normal user needs at a glance: which model is active, is the system up, is there
+ * drift, what is the root cause, and which features are affected. Everything technical
+ * lives behind View Details.
  */
-export function SimpleOverview({ bundle, report, healthy, ready }: Props) {
+export function SimpleOverview({ bundle, report, healthy, ready, activeModel }: Props) {
   const { modelVersion, driftStatus, rootCause, driftedCount } = bundle;
+
+  const modelName = activeModel?.name ?? "drifttrace-loan-default";
+  const isCustom = activeModel?.is_custom ?? false;
 
   const systemStatus =
     healthy === false
@@ -33,9 +38,13 @@ export function SimpleOverview({ bundle, report, healthy, ready }: Props) {
       <section className="section bento" aria-label="System overview">
         <div className="col-3">
           <MetricCard
-            label="Model"
-            value={modelVersion ? `v${modelVersion}` : "-"}
-            sub="Monitored model"
+            label="Active Model"
+            value={<span style={{ fontSize: "1.15rem", wordBreak: "break-word" }}>{modelName}</span>}
+            sub={
+              isCustom
+                ? "Uploaded model (custom)"
+                : `Default loan model${modelVersion ? ` · v${modelVersion}` : ""}`
+            }
           />
         </div>
         <div className="col-3">

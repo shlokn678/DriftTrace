@@ -12,14 +12,14 @@ controlled blue accent).
 
 ## Prerequisites
 The DriftTrace backend must be running with a trained/registered model. From the repo
-root:
+root (run the one-time bootstrap first if you haven't):
 ```
-# ensure a model + baseline + transform params exist
-.\.venv\Scripts\python.exe -m drifttrace.cli.main run-pipeline --seed 42 --min-roc-auc 0.6
+# ensure runtime state exists (dataset + model + baseline)
+.\.venv\Scripts\python.exe -m drifttrace.bootstrap
 # start the API
-.\.venv\Scripts\python.exe -m uvicorn drifttrace.serving.app:create_app --factory --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m drifttrace.cli.main serve --host 127.0.0.1 --port 8000
 ```
-(Or run the full Docker Compose stack - see ../docs/runbook.md.)
+See ../docs/runbook.md for the full local-first workflow.
 
 ## Develop
 ```

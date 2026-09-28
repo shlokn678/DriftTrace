@@ -105,4 +105,22 @@ class ModelStatusResponse(BaseModel):
     reference_available: bool = False
     dependencies_available: bool = False
     ready_to_monitor: bool = False
+    active: bool = False
     message: str | None = None
+
+
+class ActiveModelResponse(BaseModel):
+    """The model currently serving predictions (Phase 5).
+
+    ``is_custom`` distinguishes an onboarded/activated model from the default loan
+    model that ships with the project and serves as the fallback.
+    """
+
+    is_custom: bool
+    model_id: str | None = None
+    name: str
+    framework: str | None = None
+    task: str | None = None
+    model_version: str | None = None
+    features: list[str] = Field(default_factory=list)
+    loaded: bool = False

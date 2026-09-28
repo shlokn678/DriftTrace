@@ -48,6 +48,7 @@ def client(app_env):
     from drifttrace.serving.onboarding import REGISTRY
 
     REGISTRY._models.clear()
+    REGISTRY.deactivate()
     return TestClient(create_app(app_env))
 
 
@@ -117,3 +118,52 @@ def test_model_status_not_found(client) -> None:
 @pytest.mark.integration
 def test_upload_requires_file(client) -> None:
     assert client.post("/models/upload").status_code == 422
+
+
+# ---- Phase 5: active-model workflow ---------------------------------------------------
+@pytest.mark.integration
+def test_active_model_defaults_to_loan_model(client) -> None:
+    resp = client.get("/models/active")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["is_custom"] is False
+    assert body["name"] == "drifttrace-loan-default"
+    assert body["model_id"] is None
+
+
+@pytest.mark.integration
+def test_activate_uploaded_model_becomes_active(client) -> None:
+    files = {"file": ("model.pkl", _model_bytes(), "application/octet-stream")}
+    model_id = client.post("/models/upload", files=files).json()["model_id"]
+
+    resp = client.post(f"/models/{model_id}/activate")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["is_custom"] is True
+    assert body["model_id"] == model_id
+
+    # /models/active and /model-info now reflect the custom model.
+    assert client.get("/models/active").json()["model_id"] == model_id
+    assert client.get(f"/models/{model_id}").json()["active"] is True
+
+    # A prediction is served by the active model and still emits a standardized event.
+    pred = client.post("/predict", json={"income": 4200.0, "request_id": "act-1"})
+    assert pred.status_code == 200
+    assert pred.json()["event_emitted"] is True
+
+
+@pytest.mark.integration
+def test_deactivate_restores_default_model(client) -> None:
+    files = {"file": ("model.pkl", _model_bytes(), "application/octet-stream")}
+    model_id = client.post("/models/upload", files=files).json()["model_id"]
+    client.post(f"/models/{model_id}/activate")
+
+    resp = client.post("/models/deactivate")
+    assert resp.status_code == 200
+    assert resp.json()["is_custom"] is False
+    assert client.get("/models/active").json()["model_id"] is None
+
+
+@pytest.mark.integration
+def test_activate_unknown_model_404(client) -> None:
+    assert client.post("/models/does-not-exist/activate").status_code == 404

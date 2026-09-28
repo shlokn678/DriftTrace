@@ -1,9 +1,9 @@
 """Environment-driven configuration for the serving layer (NFR-4, NFR-7).
 
 All settings come from environment variables with safe local defaults; no secrets and
-no machine-specific absolute paths are hard-coded. Container-to-container communication
-uses Docker service names (e.g. ``redpanda:9092``, ``http://mlflow:5000``) supplied via
-the environment in Compose.
+no machine-specific absolute paths are hard-coded. The defaults target direct local
+execution (localhost); an optional, separately-run Redpanda broker can be pointed at via
+``REDPANDA_BROKER`` but is not required for the normal workflow.
 """
 
 from __future__ import annotations

@@ -5,6 +5,7 @@
 // deployment, set VITE_API_BASE to the backend origin. Defaults to "/api".
 
 import type {
+  ActiveModelResponse,
   Explanation,
   HealthResponse,
   Metrics,
@@ -131,4 +132,11 @@ export const api = {
   },
   modelStatus: (modelId: string) =>
     request<ModelStatusResponse>(`/models/${encodeURIComponent(modelId)}`),
+  activeModel: () => request<ActiveModelResponse>("/models/active"),
+  activateModel: (modelId: string) =>
+    request<ActiveModelResponse>(`/models/${encodeURIComponent(modelId)}/activate`, {
+      method: "POST",
+    }),
+  deactivateModel: () =>
+    request<ActiveModelResponse>("/models/deactivate", { method: "POST" }),
 };

@@ -30,6 +30,7 @@ from drifttrace.features.transform import MODEL_FEATURES, TransformParams, trans
 from drifttrace.serving.config import ServingSettings, get_serving_settings
 from drifttrace.serving.metrics import METRICS
 from drifttrace.serving.schemas import (
+    ActiveModelResponse,
     ExplainRequest,
     HealthResponse,
     ModelInfoResponse,
@@ -59,21 +60,43 @@ class ModelHolder:
 
     def __init__(self, settings: ServingSettings) -> None:
         self.settings = settings
-        self.adapter: ModelAdapter | None = None
-        self.model_version: str | None = None
+        # Default model: the trained loan model loaded from MLflow. This is the fallback
+        # whenever no custom model is active.
+        self.default_adapter: ModelAdapter | None = None
+        self.default_model_version: str | None = None
+        # Active custom model (set via the onboarding "Use this model" flow). When None,
+        # the default model serves.
+        self.active_adapter: ModelAdapter | None = None
+
+    @property
+    def adapter(self) -> ModelAdapter | None:
+        """The adapter that serves predictions: the active model, else the default."""
+        return self.active_adapter or self.default_adapter
 
     @property
     def ready(self) -> bool:
         return self.adapter is not None
 
     @property
+    def active(self) -> bool:
+        """True when a custom (onboarded) model is currently serving."""
+        return self.active_adapter is not None
+
+    @property
+    def model_version(self) -> str | None:
+        """The serving model version: active model's, else the default model's."""
+        if self.active_adapter is not None:
+            return self.active_adapter.metadata().model_version
+        return self.default_model_version
+
+    @property
     def model(self) -> Any:
-        """The underlying estimator, if the adapter exposes one (sklearn)."""
+        """The underlying estimator, if the serving adapter exposes one (sklearn)."""
         return getattr(self.adapter, "raw_model", None)
 
     @property
     def transform_params(self) -> TransformParams | None:
-        """The feature-transform params, if the adapter exposes them (sklearn)."""
+        """The feature-transform params, if the serving adapter exposes them (sklearn)."""
         return getattr(self.adapter, "transform_params", None)
 
     def load(self) -> None:
@@ -88,10 +111,16 @@ class ModelHolder:
             return
         estimator = load_model(version, tracking_uri=uri)
         params = self.settings.load_transform_params()
-        self.model_version = str(version)
+        self.default_model_version = str(version)
         # Wrap the loaded estimator in the model-agnostic adapter.
-        self.adapter = build_adapter(estimator, params, model_version=str(version))
-        logger.info("loaded model version %s via %s adapter", self.model_version, "sklearn")
+        self.default_adapter = build_adapter(estimator, params, model_version=str(version))
+        logger.info(
+            "loaded default model version %s via sklearn adapter", self.default_model_version
+        )
+
+    def set_active(self, adapter: ModelAdapter | None) -> None:
+        """Set (or clear, with None) the active custom model adapter."""
+        self.active_adapter = adapter
 
 
 def _make_sink(settings: ServingSettings) -> EventSink:
@@ -166,11 +195,19 @@ def create_app(settings: ServingSettings | None = None) -> Any:
 
     @asynccontextmanager
     async def lifespan(_app: Any) -> AsyncIterator[None]:
-        # Attempt to load the model at startup; stay up (non-ready) if none exists.
+        # Attempt to load the default model at startup; stay up (non-ready) if none.
         try:
             holder.load()
         except Exception as exc:  # noqa: BLE001
             logger.warning("model load at startup failed: %s", exc)
+        # Re-sync the active custom model (if one was activated in this process) so the
+        # holder and the process-wide onboarding registry agree after a restart.
+        try:
+            from drifttrace.serving.onboarding import REGISTRY
+
+            holder.set_active(REGISTRY.build_active_adapter())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("active model re-sync failed: %s", exc)
         yield
 
     app = FastAPI(title="DriftTrace Prediction API", version="1.0", lifespan=lifespan)
@@ -204,9 +241,12 @@ def create_app(settings: ServingSettings | None = None) -> Any:
 
     @app.get("/model-info", response_model=ModelInfoResponse)
     def model_info() -> ModelInfoResponse:
+        name = REGISTERED_MODEL_NAME
+        if holder.active and holder.active_adapter is not None:
+            name = holder.active_adapter.metadata().name or REGISTERED_MODEL_NAME
         return ModelInfoResponse(
             model_version=holder.model_version,
-            model_name=REGISTERED_MODEL_NAME,
+            model_name=name,
             features=list(MODEL_FEATURES),
             loaded=holder.ready,
         )
@@ -333,6 +373,73 @@ def create_app(settings: ServingSettings | None = None) -> Any:
             message=onboarded.message,
         )
 
+    def _active_model_response() -> ActiveModelResponse:
+        """Describe whichever model currently serves predictions."""
+        from drifttrace.serving.onboarding import REGISTRY
+
+        if holder.active and holder.active_adapter is not None:
+            meta = holder.active_adapter.metadata()
+            active = REGISTRY.active()
+            return ActiveModelResponse(
+                is_custom=True,
+                model_id=meta.model_id,
+                name=meta.name or "custom-model",
+                framework=meta.framework,
+                task=meta.task,
+                model_version=meta.model_version,
+                features=active.features if active else list(MODEL_FEATURES),
+                loaded=holder.ready,
+            )
+        return ActiveModelResponse(
+            is_custom=False,
+            model_id=None,
+            name=REGISTERED_MODEL_NAME,
+            framework="scikit-learn",
+            task="binary_classification",
+            model_version=holder.model_version,
+            features=list(MODEL_FEATURES),
+            loaded=holder.ready,
+        )
+
+    @app.get("/models/active", response_model=ActiveModelResponse)
+    def active_model() -> ActiveModelResponse:
+        """Return the model currently serving predictions (custom or default loan model)."""
+        return _active_model_response()
+
+    @app.post("/models/{model_id}/activate", response_model=ActiveModelResponse)
+    def activate_model(model_id: str) -> ActiveModelResponse:
+        """Activate a supported onboarded model so ``/predict`` serves it ("Use this model").
+
+        The default loan model remains the fallback: activation can be reversed and, if
+        activation fails, the previously serving model is unchanged.
+        """
+        from drifttrace.serving.onboarding import REGISTRY
+
+        try:
+            REGISTRY.activate(model_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="model not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        try:
+            adapter = REGISTRY.build_active_adapter()
+        except Exception as exc:  # noqa: BLE001 - surface a clean activation error
+            REGISTRY.deactivate()
+            raise HTTPException(status_code=422, detail=f"could not activate model: {exc}") from exc
+        holder.set_active(adapter)
+        logger.info("activated custom model %s", model_id)
+        return _active_model_response()
+
+    @app.post("/models/deactivate", response_model=ActiveModelResponse)
+    def deactivate_model() -> ActiveModelResponse:
+        """Clear the active custom model and restore the default loan model."""
+        from drifttrace.serving.onboarding import REGISTRY
+
+        REGISTRY.deactivate()
+        holder.set_active(None)
+        return _active_model_response()
+
     @app.get("/models/{model_id}", response_model=ModelStatusResponse)
     def model_status(model_id: str) -> ModelStatusResponse:
         """Return the onboarding/registration status of a previously uploaded model."""
@@ -353,6 +460,7 @@ def create_app(settings: ServingSettings | None = None) -> Any:
             reference_available=onboarded.reference_available,
             dependencies_available=onboarded.dependencies_available,
             ready_to_monitor=onboarded.ready_to_monitor,
+            active=(REGISTRY.active_model_id == onboarded.model_id),
             message=onboarded.message,
         )
 

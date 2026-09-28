@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { CheckCircle2, FileUp, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, FileUp, Loader2, Rocket, XCircle } from "lucide-react";
 import type { UploadModelResponse } from "../api/types";
 import { api, ApiError } from "../api/client";
 import { BentoCard, Button, MonoLabel, Pill } from "../components/primitives";
@@ -7,6 +7,8 @@ import { BentoCard, Button, MonoLabel, Pill } from "../components/primitives";
 interface Props {
   /** Called when a supported model has been inspected and is ready to monitor. */
   onReady?: (result: UploadModelResponse) => void;
+  /** Called after a model is successfully activated ("Use this model"). */
+  onActivated?: () => void;
 }
 
 type Phase = "idle" | "uploading" | "done" | "error";
@@ -28,7 +30,7 @@ function missingLabel(key: string): string {
  * inspects it server-side and reports what it found. Nothing is fabricated - only
  * genuinely missing information is requested.
  */
-export function Onboarding({ onReady }: Props) {
+export function Onboarding({ onReady, onActivated }: Props) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [result, setResult] = useState<UploadModelResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -157,7 +159,7 @@ export function Onboarding({ onReady }: Props) {
         )}
 
         {phase === "done" && result && (
-          <InspectionResult result={result} onReset={reset} />
+          <InspectionResult result={result} onReset={reset} onActivated={onActivated} />
         )}
       </BentoCard>
     </section>
@@ -167,11 +169,14 @@ export function Onboarding({ onReady }: Props) {
 function InspectionResult({
   result,
   onReset,
+  onActivated,
 }: {
   result: UploadModelResponse;
   onReset: () => void;
+  onActivated?: () => void;
 }) {
   const {
+    model_id,
     supported,
     ready_to_monitor,
     framework,
@@ -185,6 +190,29 @@ function InspectionResult({
     missing,
     message,
   } = result;
+
+  const [activating, setActivating] = useState(false);
+  const [activated, setActivated] = useState(false);
+  const [activateError, setActivateError] = useState<string | null>(null);
+
+  const useThisModel = useCallback(async () => {
+    if (!model_id) return;
+    setActivating(true);
+    setActivateError(null);
+    try {
+      await api.activateModel(model_id);
+      setActivated(true);
+      onActivated?.();
+    } catch (err) {
+      const msg =
+        err instanceof ApiError
+          ? err.message
+          : `Could not activate the model (${(err as Error).message})`;
+      setActivateError(msg);
+    } finally {
+      setActivating(false);
+    }
+  }, [model_id, onActivated]);
 
   if (!supported) {
     return (
@@ -288,7 +316,45 @@ function InspectionResult({
         </div>
       )}
 
-      <div className="row row-3">
+      {activateError && (
+        <div className="onboard-result onboard-result--bad" role="alert">
+          <div className="row row-3">
+            <XCircle size={18} aria-hidden style={{ color: "var(--status-drift)" }} />
+            <MonoLabel>Could not activate</MonoLabel>
+          </div>
+          <p className="muted" style={{ fontSize: "0.9rem" }}>
+            {activateError}
+          </p>
+        </div>
+      )}
+
+      <div className="row row-3 wrap">
+        {activated ? (
+          <Pill variant="root" dot>
+            Active model
+          </Pill>
+        ) : (
+          <Button
+            variant="primary"
+            onClick={useThisModel}
+            disabled={!ready_to_monitor || activating}
+            title={
+              ready_to_monitor
+                ? "Serve predictions with this model"
+                : "Add reference data before activating"
+            }
+          >
+            {activating ? (
+              <>
+                <Loader2 size={16} className="spin" aria-hidden /> Activating...
+              </>
+            ) : (
+              <>
+                <Rocket size={16} aria-hidden /> Use this model
+              </>
+            )}
+          </Button>
+        )}
         <Button onClick={onReset}>Onboard another model</Button>
       </div>
     </div>

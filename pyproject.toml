@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Serving adapter (FastAPI + Docker) - Phase 3, + model upload (Phase 5)
+# Serving adapter (FastAPI) - Phase 3, + model upload/activation (Phase 5)
 serving = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
@@ -36,7 +36,8 @@ serving = [
 tracking = [
     "mlflow>=2.11",
 ]
-# Streaming adapter (Kafka API via Redpanda) - Phase 3
+# Optional streaming adapter (Kafka API via a separately-run Redpanda broker).
+# NOT required for the normal local/demo workflow, which is broker-free.
 streaming = [
     "confluent-kafka>=2.3",
 ]
@@ -103,7 +104,7 @@ addopts = "-ra -q"
 testpaths = ["tests"]
 markers = [
     "unit: pure unit tests, no external services",
-    "integration: cross-module tests, still no broker/Docker/Airflow",
+    "integration: cross-module tests, still no broker/Airflow",
     "e2e: end-to-end scenario tests",
 ]
 

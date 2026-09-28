@@ -198,5 +198,17 @@ export interface ModelStatusResponse {
   reference_available: boolean;
   dependencies_available: boolean;
   ready_to_monitor: boolean;
+  active: boolean;
   message: string | null;
+}
+
+export interface ActiveModelResponse {
+  is_custom: boolean;
+  model_id: string | null;
+  name: string;
+  framework: string | null;
+  task: string | null;
+  model_version: string | null;
+  features: string[];
+  loaded: boolean;
 }

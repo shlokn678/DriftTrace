@@ -8,7 +8,7 @@ DriftTrace watches a machine-learning pipeline in production and finds *why* it 
 to fail, not just *that* it failed. It:
 
 - monitors an ML pipeline for data drift
-- compares production data against the training baseline
+- compares production data against a training baseline
 - detects drift per feature using the **KS-test** and **PSI**
 - reads a declared **dependency graph** (via **NetworkX**) and traces drift upstream
 - identifies the **root cause** and marks downstream nodes as **symptoms**
@@ -19,155 +19,163 @@ to fail, not just *that* it failed. It:
 Instead of firing a separate alarm for every drifted feature, DriftTrace turns a wall of
 alerts into one actionable diagnosis.
 
-## Demo pipeline
-
-```
-income
-   ↓
-credit_score
-   ↓
-risk_score
-   ↓
-ML model
-   ↓
-default / not default
-```
-
-## Main technologies
-
-- Python
-- scikit-learn
-- FastAPI
-- Docker / Docker Compose
-- MLflow
-- DVC
-- Apache Airflow
-- NetworkX
-- SciPy
-- SHAP / LIME
-- Redpanda
-- React + TypeScript + Vite
-
-## Project structure
-
-```
-src/         core Python library (data, features, drift, rca, serving, streaming, ...)
-frontend/    React + TypeScript dashboard
-tests/       unit / integration / e2e tests
-config/      declared config (dependency graph, schema, drift, governance)
-docker/      Dockerfile + docker-compose
-pipelines/   Airflow DAG
-docs/        architecture and runbook
-scripts/     helper scripts
-data/        generated dataset (runtime)
-artifacts/   model baseline and run artifacts (runtime)
-reports/     monitoring reports and alerts (runtime)
-```
-
-- **src/** holds the real logic: drift detection, root-cause analysis, and the FastAPI service.
-- **frontend/** is the monitoring dashboard.
-- **config/** defines the dependency graph and thresholds.
-- **docker/** runs the whole stack locally.
-
-## Setup
-
-**Requirements:** Python, Node.js / npm, Docker Desktop.
-
-Clone:
-
-```
-git clone https://github.com/shlokn678/DriftTrace.git
-cd DriftTrace
-```
-
-Start the backend stack:
-
-```
-$env:DRIFTTRACE_USE_REDPANDA = "true"
-docker compose -f docker/docker-compose.yml --profile full up -d
-```
-
-Check the containers:
-
-```
-docker ps --filter "name=drifttrace" --format "{{.Names}} | {{.Status}}"
-```
-
-- API: http://localhost:8000
-- Health: http://localhost:8000/health
-
-Start the frontend in a second terminal:
-
-```
-cd frontend
-npm install
-npm run dev
-```
-
-- Dashboard: http://localhost:5173
-
-## Main demo
-
-The main scenario simulates an income distribution change (monthly income read as
-annual). All three chained features drift, but DriftTrace follows the dependency graph
-and reports:
-
-- **income → ROOT CAUSE**
-- **credit_score → SYMPTOM**
-- **risk_score → SYMPTOM**
-
-Rather than treating the three as separate alerts, it traces the drift upstream and
-identifies `income` as the single root cause, with the others as downstream symptoms.
-
 ## Model-agnostic design
 
 DriftTrace separates *model-specific prediction* from the *monitoring and root-cause
-engine*. A model plugs in through a thin **adapter** that turns its raw inputs and outputs
+engine*. A model plugs in through a thin **adapter** that turns its inputs and outputs
 into standardized prediction events; the drift, dependency-graph, and RCA core never sees
 model internals.
 
 ```
-USER MODEL → MODEL ADAPTER → STANDARDIZED PREDICTION EVENTS
-          → DRIFTTRACE CORE → KS / PSI → DEPENDENCY GRAPH + RCA
-          → ALERTS / REPORTS / EXPLANATIONS
+USER MODEL -> MODEL ADAPTER -> STANDARDIZED PREDICTION EVENTS
+           -> DRIFTTRACE CORE -> KS / PSI -> DEPENDENCY GRAPH + RCA
+           -> ALERTS / REPORTS / EXPLANATIONS
 ```
 
-The adapter layer lives in `src/drifttrace/adapters/` (`base`, `sklearn_adapter`,
-`registry`). The MVP ships **one** adapter — **scikit-learn** — and the boundary is
-designed so additional frameworks can be added without touching the core.
+The adapter layer lives in `src/drifttrace/adapters/`. The MVP ships **one** adapter,
+**scikit-learn**, and the boundary is designed so other frameworks can be added without
+touching the core.
 
-## Model onboarding
+## Demo pipeline
 
-Upload one model file; DriftTrace inspects it and asks only for what it cannot detect.
+```
+income -> credit_score -> risk_score -> ML model -> default / not default
+```
 
-1. **Upload** a model file (`.pkl`, `.pickle`, `.joblib`) — drag-and-drop or browse in the
-   dashboard, or `POST /models/upload`.
-2. **Inspect** — DriftTrace detects the framework, name, task, features, and whether the
-   model exposes probabilities.
-3. **Reference data** — reused automatically when a baseline already exists; requested only
-   if missing.
-4. **Dependency graph** — reused/detected from `config/graph.yaml`; requested only if
-   missing. Missing dependencies do not block monitoring, they only limit upstream RCA.
-5. **Start monitoring** — when the model is supported and a reference exists, it is marked
-   **ready to monitor**. Nothing is fabricated.
+## Main technologies
 
-The dashboard opens on a **simplified view** — model, system status, drift status, root
-cause, and affected features — with KS/PSI evidence, the dependency graph, SHAP/LIME, the
-operator console, and system health available behind **View details**.
+Python, scikit-learn, FastAPI, MLflow, DVC, Apache Airflow (optional), NetworkX, SciPy,
+SHAP / LIME, React + TypeScript + Vite. Runtime is **local-first**: a Python virtualenv
+for the backend and Node/Vite for the dashboard. **No Docker.**
+
+## Prerequisites
+
+- **Python 3.11+** (the project's `requires-python` is `>=3.11`)
+- **Node.js / npm** (for the dashboard)
+- **Git**
+
+No Docker, no message broker, and no cloud account are required.
+
+## Fresh clone -> running in 4 steps
+
+```powershell
+# 1. Clone
+git clone https://github.com/shlokn678/DriftTrace.git
+cd DriftTrace
+
+# 2. Set up + bootstrap (creates .venv, installs the project, generates the dataset,
+#    trains + registers the loan model, writes the drift baseline). One command:
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup.ps1
+
+# 3. Start the backend API
+.\.venv\Scripts\python.exe -m drifttrace.cli.main serve --host 127.0.0.1 --port 8000
+
+# 4. Start the dashboard (second terminal)
+cd frontend
+npm run dev
+```
+
+Then open the dashboard at **http://localhost:5173** (API at **http://localhost:8000**).
+
+On Linux/macOS use `bash scripts/setup.sh` for step 2 and
+`./.venv/bin/python -m drifttrace.cli.main serve ...` for step 3.
+
+### What the setup does
+
+`scripts\setup.ps1` (or the cross-platform `python -m drifttrace.bootstrap`):
+creates the `.venv`, installs the project with the `serving,tracking,streaming` extras,
+then reconstructs all runtime state deterministically from tracked files - runtime
+directories, the synthetic dataset, schema validation, the trained + registered model,
+and the drift baseline. It is safe to re-run; pass `-Force` to rebuild from scratch. It
+fails with a clear message if a prerequisite (e.g. Python 3.11+) is missing.
+
+## Using DriftTrace
+
+### Upload and activate a model
+
+1. In the dashboard, drop a model file (`.pkl`, `.pickle`, `.joblib`) onto **Add Model**,
+   or browse for one.
+2. DriftTrace inspects it automatically (framework, name, task, features, probability
+   support) and reuses your existing reference data and dependency graph. It only asks
+   for genuinely missing information.
+3. Click **Use this model** to make it the **active model**. `/predict` now serves it.
+   The default loan model remains the fallback - **Deactivate** restores it.
+
+The default (unauthenticated, localhost) API also exposes this directly:
+
+```powershell
+# Upload (multipart) and inspect
+curl.exe -F "file=@model.pkl" http://localhost:8000/models/upload
+# Activate a returned model id
+curl.exe -X POST http://localhost:8000/models/<model_id>/activate
+# See the active model (custom or default loan model)
+curl.exe http://localhost:8000/models/active
+```
+
+### Run the drift demo (no Docker, no broker)
+
+The main scenario simulates an income distribution change (monthly income read as
+annual). All three chained features drift, but DriftTrace follows the dependency graph
+and reports **income -> ROOT CAUSE**, **credit_score -> SYMPTOM**, **risk_score ->
+SYMPTOM**. Run it through the real Phase 4 monitoring/RCA pipeline:
+
+```powershell
+curl.exe -X POST http://localhost:8000/demo/run-scenario `
+  -H "Content-Type: application/json" `
+  -d '{\"scenario\": \"income_annual\", \"n\": 300, \"seed\": 7}'
+```
+
+Other scenarios: `control` (no drift), `mid_chain` (credit_score root), `two_roots`.
+In the dashboard, use the operator controls under **View Details** to run a scenario.
+
+### Check the root-cause result
+
+```powershell
+curl.exe http://localhost:8000/rca/latest      # latest persisted RCA report
+```
+
+Or open the dashboard: the simplified view shows the active model, system status, drift
+status, root cause, and affected features. Everything technical (KS/PSI, per-feature
+drift, dependency graph, SHAP/LIME, governance, metrics) is behind **View Details**.
+
+## Project structure
+
+```
+src/         core Python library (adapters, data, features, drift, rca, serving, ...)
+             plus bootstrap.py (fresh-clone setup)
+frontend/    React + TypeScript dashboard
+tests/       unit / integration / e2e tests
+config/      declared config (dependency graph, schema, drift, governance)
+scripts/     setup.ps1 / setup.sh (bootstrap) + dev helpers
+pipelines/   Airflow DAG (optional)
+docs/        architecture and runbook
+data/ artifacts/ reports/   runtime outputs (git-ignored; rebuilt by the bootstrap)
+```
+
+## Troubleshooting
+
+- **`Python 3.11+ is required`** - install Python 3.11 or newer; on Windows the `py`
+  launcher (`py -3.13`) is used automatically if present.
+- **`/ready` returns `ready: false`** - the model is not loaded. Run the bootstrap:
+  `.\.venv\Scripts\python.exe -m drifttrace.bootstrap` (add `--force` to rebuild).
+- **Dashboard shows values as unavailable** - the API is not reachable. Confirm it is
+  running on port 8000; the dashboard proxies `/api` to it in dev.
+- **Rebuild everything from scratch** - `scripts\setup.ps1 -Force` (regenerates the
+  dataset and retrains the model).
 
 ## Current implementation
 
 - [x] Model-agnostic adapter layer (scikit-learn adapter)
-- [x] Minimal-input model onboarding (upload → inspect → ready)
+- [x] Model onboarding + activation (upload -> inspect -> use this model -> active)
 - [x] Simplified dashboard with progressive disclosure
+- [x] Local-first setup + fresh-clone bootstrap (no Docker)
 - [x] Data generation and validation
 - [x] DVC data versioning
 - [x] Model training and evaluation
-- [x] MLflow tracking and model registry
-- [x] Airflow orchestration
+- [x] MLflow tracking and model registry (local SQLite)
+- [x] Airflow orchestration (optional)
 - [x] FastAPI model serving
-- [x] Docker / Docker Compose deployment
-- [x] Prediction event streaming
+- [x] Prediction event streaming (local file; optional Redpanda)
 - [x] KS/PSI drift detection
 - [x] NetworkX root-cause analysis
 - [x] Root-cause alerting
@@ -177,8 +185,9 @@ operator console, and system health available behind **View details**.
 
 ## Current scope
 
-- The current demo uses a **synthetic loan-default dataset**.
+- The demo uses a **synthetic loan-default dataset**.
 - The monitoring/RCA core is **model-agnostic** through the adapter layer; the only
   implemented adapter is **scikit-learn**.
-- The current dependency graph is `income → credit_score → risk_score → prediction`.
-- **Prometheus/Grafana** and **AWS SageMaker** are **not** part of the implemented MVP.
+- The dependency graph is `income -> credit_score -> risk_score -> prediction`.
+- The normal workflow is broker-free. **Redpanda** is optional and separately-run; it is
+  not required. **Prometheus/Grafana** and **AWS SageMaker** are not part of the MVP.

@@ -10,7 +10,8 @@ finalized diagrams and interfaces as implementation proceeds.
   standardized prediction events; the core never sees model internals. The MVP ships one
   adapter (scikit-learn). Flow: `model → adapter → standardized events → core → KS/PSI →
   graph + RCA → alerts/reports/explanations`.
-- Airflow, Kafka/Redpanda, FastAPI, and Docker are thin adapters over the core.
+- FastAPI (and optionally Airflow or a separately-run Redpanda broker) are thin
+  adapters over the core. The normal local workflow is broker-free and Docker-free.
 - Monitoring is asynchronous; prediction latency never depends on drift computation.
 - The dependency graph is declared in `config/graph.yaml` and loaded into NetworkX.
 - Alert only on the root-cause candidate; symptoms are recorded as evidence.
