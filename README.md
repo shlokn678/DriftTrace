@@ -170,7 +170,33 @@ The **synthetic Gradient Boosting classifier with a dependency graph** is the re
 engagement_score → service_score → risk_indicator → prediction
 ```
 
-The generated bundles are not required for the application to start, but you need to upload and activate a model before using model-specific features.
+The generated bundles are not required for the application to start, but you need to upload and activate a model before using model-specific features. **These five bundles are regression fixtures, not an allowlist** — any model that conforms to a supported adapter contract works.
+
+## Model-agnostic design
+
+The monitoring core (drift engine, RCA engine, streaming lifecycle, frontend) does not depend on any specific model class, feature schema, feature count, class count, or output interface. It talks to models only through a **model adapter** (`src/drifttrace/adapters/base.py`) and selects one from bundle metadata via a registry (`src/drifttrace/adapters/registry.py`).
+
+An adapter exposes framework/estimator identity, model/version/task metadata, the input feature names and order, prediction (and optional probability), the output shape, and clear errors for unsupported operations. The generic core only ever sees the standardized `PredictionResult` / `ModelMetadata` / `FeatureSchema` — never the framework object.
+
+**Onboarding a previously unseen model** requires no production-code change:
+
+1. Train any supported scikit-learn estimator or `Pipeline` (classifier, multiclass, or regressor; with or without `predict_proba`).
+2. Save it as `model.pkl` (or `.joblib` / `.pickle`), export your baseline rows as `reference.csv`, and optionally declare a `graph.json`.
+3. Zip them into a bundle and upload + activate it. The feature schema, task, output interface, and capabilities are discovered from the model and its reference data — DriftTrace uses the model's own feature names and order for prediction, monitoring, and explanations.
+
+### Supported model/framework matrix
+
+| Framework | Status | Notes |
+| --- | --- | --- |
+| scikit-learn estimators (classification, incl. multiclass) | **Implemented & tested** | Uses `feature_names_in_` / reference columns; `predict_proba` is optional |
+| scikit-learn regressors | **Implemented & tested** | Numeric output; no class/probability required |
+| scikit-learn `Pipeline` (preprocessing + estimator) | **Implemented & tested** | Preprocessing runs inside the model's own `predict` |
+| XGBoost | **Not implemented** | No adapter yet; add one implementing the adapter contract |
+| LightGBM | **Not implemented** | No adapter yet |
+| ONNX Runtime | **Not implemented** | No adapter yet (would use `model.onnx`, not a pickle) |
+| PyTorch / others | **Not implemented** | Future work |
+
+A framework is listed as supported only when its adapter is implemented **and** independently tested. To add one, implement the `ModelAdapter` contract and register detection in `registry.py`; the drift engine, RCA engine, streaming lifecycle, and frontend do not need to change.
 
 ## Installation
 
@@ -361,6 +387,25 @@ python scripts/live_demo_producer.py --mode normal --events 1000 --transport red
 
 Expected: stable windows return, and the incident closes after the configured consecutive-stable-window condition. The dashboard continues to show real KS/PSI measurements for the latest window; those measurements do not reset to zero, and prior windows remain in history.
 
+### Running the producer for any other model
+
+The producer is model-agnostic. It derives the feature schema and declared graph from the **active** model's reference data and `graph.json` — no feature names are hardcoded. Two options generalize it to any compatible bundle:
+
+- `--bundle <path>`: derive the reference schema and declared graph from a specific bundle (`.zip` or directory). The bundle must match the active model's schema; a mismatch is rejected with an actionable error.
+- `--drift-features f1,f2,...`: choose exactly which features DRIFT mode shifts, validated against the active model's real schema.
+
+When neither is given, DRIFT defaults to the declared graph's upstream chain (so graph RCA yields one root + downstream symptoms), else the first numeric reference features. The producer prints which features it shifts and how the default was chosen.
+
+```powershell
+# a different, previously-unseen bundle (schema + graph derived from the bundle):
+python scripts/live_demo_producer.py --bundle artifacts\test_models\wine_random_forest\wine_random_forest.drift.zip --mode normal --then-drift 300
+
+# pick drift features explicitly (validated against the active model):
+python scripts/live_demo_producer.py --mode drift --drift-features alcohol,proline
+```
+
+The existing synthetic showcase commands above are unchanged and remain the default.
+
 ### What to look for during the demo
 
 - Normal traffic produces mostly **STABLE** windows.
@@ -439,14 +484,16 @@ npm run build
 
 The last recorded full validation for the implementation reported:
 
-- **129 pytest tests passed**, 0 failures.
-- Ruff: clean.
+- **134 pytest tests passed**, 0 failures (includes genericity tests that build previously-unseen models at test time).
+- Ruff: clean (`src tests`).
 - Black: clean.
 - MyPy: clean across 54 source files.
 - Frontend TypeScript check: passed.
 - Frontend production build: passed.
 - Edge-faithful dependency-graph regression test: passed.
 - Multi-root RCA tests with genuine drift data and live result-schema verification: passed.
+- Model-agnostic end-to-end tests (`tests/integration/test_model_agnostic.py`): previously-unseen multiclass `Pipeline`, a regressor without `predict_proba` (SVR), a novel graph chain with edge-accurate RCA, model-switch isolation, and dynamic-schema SHAP — all pass with **no production-code changes per model**.
+- Smoke test and five-bundle validation: passed.
 
 These are recorded validation results for the tested code state. After making further code changes, rerun the commands above to validate the new state.
 
