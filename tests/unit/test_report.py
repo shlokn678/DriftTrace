@@ -80,6 +80,40 @@ def test_report_saves_json_md_and_latest(graph, tmp_path) -> None:
 
 
 @pytest.mark.unit
+def test_report_graph_nodes_follow_dependency_direction_not_feature_order(graph) -> None:
+    """Regression: the rendered graph order must follow the declared dependency direction
+    (parent -> child), NOT the drift report's feature/insertion order.
+
+    This reproduces the live-RCA screenshot bug: the drift report lists the child
+    ``feature_b`` BEFORE its parent ``feature_a``, yet the graph is a -> b -> c. The
+    report's ``graph_nodes`` must still be topologically ordered so the UI draws arrows
+    root -> symptoms, matching the RCA result (root=feature_a, symptoms b, c).
+    """
+    # Build a drift report whose dict insertion order puts the child before the parent.
+    drift = DriftReport(window_id="w0", baseline_version="1")
+    for n in ("feature_b", "feature_a", "feature_c"):  # deliberately NOT topological
+        drift.nodes[n] = NodeDriftResult(
+            node=n,
+            verdict=str(Verdict.DRIFT),
+            ks={"verdict": str(Verdict.DRIFT), "p_value": 0.01},
+            psi={"verdict": str(Verdict.DRIFT), "psi": 0.5},
+        )
+    rca = analyze(drift, graph)
+    report = build_report(drift, rca, graph, model_version="1")
+    d = report.to_dict()
+
+    # graph_nodes is the authoritative topological order (parent before child).
+    assert d["graph_nodes"] == ["feature_a", "feature_b", "feature_c"]
+    # It excludes the model-output node.
+    assert "prediction" not in d["graph_nodes"]
+    # And it agrees with the RCA result: the root comes first, symptoms downstream.
+    root = d["rca"]["root_cause_candidates"][0]["node"]
+    assert root == "feature_a"
+    assert d["graph_nodes"].index("feature_a") < d["graph_nodes"].index("feature_b")
+    assert d["graph_nodes"].index("feature_b") < d["graph_nodes"].index("feature_c")
+
+
+@pytest.mark.unit
 def test_report_lifecycle_evidence_present(graph) -> None:
     drift = _drift_report(["feature_a"])
     rca = analyze(drift, graph)

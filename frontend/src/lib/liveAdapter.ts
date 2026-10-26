@@ -136,5 +136,14 @@ export function liveWindowToReport(
       drifted_nodes: window.drifted_features,
     },
     alerts,
+    // Declared dependency order (parents before children) so the Trace Upstream diagram
+    // renders arrows in the real direction. Fall back to the RCA chain order
+    // (root -> symptoms) when the window predates graph_nodes but has a root + path.
+    graph_nodes:
+      window.graph_nodes && window.graph_nodes.length > 0
+        ? window.graph_nodes
+        : window.primary_root_cause
+          ? [window.primary_root_cause, ...window.primary_symptom_path]
+          : [],
   };
 }

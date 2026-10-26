@@ -34,6 +34,7 @@ export function RcaSection({ report, dependenciesAvailable = true, source = "bat
         <DependencyGraph
           classifications={report?.classifications ?? null}
           dependenciesAvailable={dependenciesAvailable}
+          order={report?.graph_nodes ?? null}
         />
       </BentoCard>
 

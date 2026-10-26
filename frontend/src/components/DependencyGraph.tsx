@@ -7,6 +7,14 @@ interface Props {
   classifications: Record<string, NodeClass> | null;
   /** Whether a dependency graph was provided for the active model. */
   dependenciesAvailable?: boolean;
+  /**
+   * Declared dependency order (parents before children, i.e. the graph's topological
+   * order) from the backend. When provided, nodes on the graph chain are rendered in
+   * this order so the arrows follow the real dependency direction (root -> symptoms),
+   * matching the RCA result. Nodes not in this list keep their reported order and are
+   * appended after. Nothing is hard-coded: the order is the declared graph's own.
+   */
+  order?: string[] | null;
 }
 
 const STATUS_TEXT: Record<string, string> = {
@@ -22,12 +30,32 @@ const STATUS_TEXT: Record<string, string> = {
  * classifications. Feature names are dynamic - nothing is hard-coded. The output node
  * ("prediction") is shown last as the model output.
  */
-export function DependencyGraph({ classifications, dependenciesAvailable = true }: Props) {
+export function DependencyGraph({
+  classifications,
+  dependenciesAvailable = true,
+  order = null,
+}: Props) {
   const entries = classifications ? Object.keys(classifications) : [];
-  // Put the model output node last; keep the rest in their reported order.
-  const nodes = entries
-    .filter((n) => n !== "prediction")
-    .concat(entries.includes("prediction") ? ["prediction"] : []);
+
+  // Order the monitored nodes by the declared dependency graph when we have it, so the
+  // arrows follow the real parent -> child direction (root cause upstream, symptoms
+  // downstream) instead of the backend dict's feature order. Nodes present in the
+  // report but not on the declared chain keep their reported order and come after the
+  // chain. The model output node is always rendered last.
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  const push = (n: string) => {
+    if (n !== "prediction" && entries.includes(n) && !seen.has(n)) {
+      ordered.push(n);
+      seen.add(n);
+    }
+  };
+  if (order && order.length > 0) {
+    for (const n of order) push(n);
+  }
+  // Append any remaining non-output nodes in their reported order.
+  for (const n of entries) push(n);
+  const nodes = ordered.concat(entries.includes("prediction") ? ["prediction"] : []);
 
   if (nodes.length === 0) {
     return (

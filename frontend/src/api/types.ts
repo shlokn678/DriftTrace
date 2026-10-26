@@ -126,6 +126,8 @@ export interface MonitoringReport {
   drift: DriftReport;
   rca: RCAResult;
   alerts: AlertRecord[];
+  /** Declared dependency order (parents before children) for graph rendering. */
+  graph_nodes?: string[];
 }
 
 export interface RcaLatestResponse {
@@ -210,6 +212,8 @@ export interface LiveWindowResult {
   model_id?: string | null;
   model_version?: string | null;
   session_id?: string | null;
+  /** Declared dependency order (parents before children); empty for no-graph models. */
+  graph_nodes?: string[];
   window_id: string;
   start_timestamp: string | null;
   end_timestamp: string | null;

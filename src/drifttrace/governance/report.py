@@ -41,6 +41,10 @@ class MonitoringReport:
     drift: dict
     rca: dict
     alerts: list[dict] = field(default_factory=list)
+    # Declared dependency order (parents before children) of the drift-checkable nodes,
+    # so the UI can render the graph with arrows following the real dependency direction
+    # rather than the drift report's feature order. Derived from the declared graph only.
+    graph_nodes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -122,6 +126,11 @@ def build_report(
     incident_id: str | None = None,
 ) -> MonitoringReport:
     """Assemble a :class:`MonitoringReport` from drift + RCA + alert results."""
+    # Topological order of the declared feature nodes (parents before children). This is
+    # the authoritative dependency direction for rendering; feature-only nodes (no graph)
+    # yield an empty list and the UI keeps its reported order. ``feature_nodes`` already
+    # excludes the model-output node and is returned in topological order.
+    graph_nodes = list(graph.feature_nodes())
     return MonitoringReport(
         report_id=new_report_id(),
         window_id=drift.window_id,
@@ -135,4 +144,5 @@ def build_report(
         drift=drift.to_dict(),
         rca=rca.to_dict(),
         alerts=alerts or [],
+        graph_nodes=graph_nodes,
     )
