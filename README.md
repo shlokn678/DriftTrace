@@ -298,30 +298,58 @@ Open the URL printed by Vite, usually `http://localhost:5173/`.
 
 This section describes the **broker-backed live streaming path**. It is optional; the normal local application can run without a broker.
 
-### Terminal 1 — start Docker Desktop and Redpanda
+This repository does **not** contain a root-level Docker Compose file. Do not run `docker compose`; use the `docker` container commands below. Docker is only used to run the Redpanda broker locally — the DriftTrace application itself is not containerized.
 
-Start Docker Desktop and wait until its engine is ready. Verify Docker can connect to its engine:
+The verified setup uses a **persistent, named** Redpanda container called `drifttrace-redpanda-1` (image `redpandadata/redpanda:v24.2.7`) that advertises its Kafka API at `127.0.0.1:9092`.
+
+Start Docker Desktop first and wait until its engine is ready. Verify Docker can connect to its engine:
 
 ```powershell
 docker info --format '{{.ServerVersion}} / {{.OSType}}'
 ```
 
-Then start Redpanda. Run this from PowerShell and keep the terminal open:
+#### If the container already exists (the common case)
+
+Start the existing container and keep its data; never delete your existing data volume or recreate the container just to start it:
 
 ```powershell
-docker run --rm --name drifttrace-redpanda -p 9092:9092 -p 9644:9644 `
-  docker.redpanda.com/redpandadata/redpanda:v24.2.7 redpanda start `
+docker start drifttrace-redpanda-1
+```
+
+Verify the broker is healthy and reachable:
+
+```powershell
+docker exec drifttrace-redpanda-1 rpk cluster info
+Test-NetConnection 127.0.0.1 -Port 9092
+```
+
+`rpk cluster info` should list one broker; `Test-NetConnection` should report `TcpTestSucceeded : True`. Leave the broker running for the rest of the demo.
+
+#### If no Redpanda container exists yet (new machine)
+
+Provision one **once**, with a named persistent volume so monitoring history survives restarts, using the tested image and advertising `127.0.0.1:9092` (which is what the producer on Windows connects to):
+
+```powershell
+docker volume create drifttrace-redpanda-data
+
+docker run -d --name drifttrace-redpanda-1 `
+  -p 9092:9092 -p 9644:9644 `
+  -v drifttrace-redpanda-data:/var/lib/redpanda/data `
+  redpandadata/redpanda:v24.2.7 redpanda start `
   --overprovisioned --smp 1 --memory 1G --reserve-memory 0M --node-id 0 --check=false `
   --kafka-addr PLAINTEXT://0.0.0.0:9092 --advertise-kafka-addr PLAINTEXT://127.0.0.1:9092
 ```
 
-Wait for Redpanda to report that startup succeeded and its Kafka API is listening on port `9092`. If a Redpanda container is already running, use that instance rather than starting another container with the same port mappings.
+This creates a **persistent** container (`-d`, no `--rm`) backed by the `drifttrace-redpanda-data` volume. After it exists, you start and stop it with `docker start drifttrace-redpanda-1` / `docker stop drifttrace-redpanda-1` — do not run the `docker run` command again, and do not delete the volume, or you will lose broker data. Then verify it with the `rpk cluster info` and `Test-NetConnection` checks above.
+
+> **Advertised address matters.** The broker must advertise `127.0.0.1:9092`. An earlier setup advertised `redpanda:9092` (a Docker-internal hostname), which the producer running on the Windows host could not resolve, so events never reached the broker. The commands above advertise `127.0.0.1:9092`, which works from the Windows host. See [Troubleshooting the live demo](#troubleshooting-the-live-demo) if events do not arrive.
 
 ### Terminal 2 — start the backend in Redpanda mode
 
-From the repository root, activate `.venv` and set the environment variables in the **same terminal** where you start the backend:
+Set the environment variables in the **same terminal** where you start the backend; they must be present in that shell before `serve` runs. Copy the whole block:
 
 ```powershell
+cd "C:\Users\shlok\OneDrive\Documents\College (sem 5)\MLOps\CP"
 .\.venv\Scripts\Activate.ps1
 
 $env:MLFLOW_DISABLE_AGENT_HINT="1"
@@ -335,41 +363,44 @@ $env:DRIFTTRACE_LIVE_MIN_WINDOW_SAMPLES="50"
 python -m drifttrace.cli.main serve --host 127.0.0.1 --port 8000
 ```
 
-The window size of `200` and minimum sample count of `50` are the recommended settings for the synthetic demo in this README. The implementation's window size is configurable through `DRIFTTRACE_LIVE_WINDOW_SIZE`.
+Replace the `cd` path if your repository lives elsewhere. Wait until the backend logs `Application startup complete` (Uvicorn), then leave this terminal running. The window size of `200` and minimum sample count of `50` are the recommended settings for the synthetic demo; both are configurable through `DRIFTTRACE_LIVE_WINDOW_SIZE` and `DRIFTTRACE_LIVE_MIN_WINDOW_SAMPLES`.
+
+If you recreate the Redpanda container after the backend has started, restart the backend (stop with `Ctrl+C`, then re-run the block above) so it reconnects to the new broker.
 
 ### Terminal 3 — start the frontend
 
 ```powershell
-cd frontend
+cd "C:\Users\shlok\OneDrive\Documents\College (sem 5)\MLOps\CP\frontend"
 npm run dev
 ```
 
-Open the Vite URL in the browser.
+Open the Vite URL printed in this terminal, usually `http://localhost:5173/`.
 
 ### In the browser
 
-1. Upload and activate `synthetic_gradient_boosting.drift.zip` from `artifacts/test_models/`. If you do not know the exact generated path, use the `Get-ChildItem` command in [Generate sample bundles](#generate-sample-bundles).
-2. Open **Live Monitoring** and click **Start**.
-3. Wait a few seconds for the live consumer to connect to the broker.
+1. Upload and activate the synthetic Gradient Boosting bundle, `synthetic_gradient_boosting.drift.zip`, from `artifacts/test_models/`. If you do not know the exact generated path, use the `Get-ChildItem` command in [Generate sample bundles](#generate-sample-bundles).
+2. Confirm the dashboard shows the intended demo model as **active** and that the live source is **redpanda** (shown in the Live Monitoring panel / `GET /live/status`), not the broker-free file source.
+3. Open **Live Monitoring** and click **Start**.
+4. Wait a few seconds for the live consumer to connect to the broker.
 
 ### Terminal 4 — send live demo events
 
-Open a fourth terminal, navigate to the repository root, and activate the virtual environment:
+Open a fourth terminal, go to the repository root, and activate the virtual environment:
 
 ```powershell
-cd "C:\path\to\DriftTrace"
+cd "C:\Users\shlok\OneDrive\Documents\College (sem 5)\MLOps\CP"
 .\.venv\Scripts\Activate.ps1
 ```
 
-Replace `C:\path\to\DriftTrace` with the actual project path. Run the following commands **one at a time**. Wait for the producer to finish and for the dashboard to process each set of events before starting the next stage.
+Replace the path if your repository lives elsewhere. Run the three commands **one at a time, in order**. After each one finishes, check the dashboard and confirm the events and evaluated windows before starting the next phase. The producer's own progress messages confirm only that it sent events — they do not prove the broker delivered them or that the backend evaluated a window. Always confirm on the dashboard (or `GET /live/status` / `GET /live/windows`).
 
-**A. Normal traffic**
+**A. Normal baseline**
 
 ```powershell
 python scripts/live_demo_producer.py --mode normal --events 600 --transport redpanda --brokers 127.0.0.1:9092 --topic drifttrace.live.v4
 ```
 
-Expected: stable windows and no open incident, provided the generated normal observations match the reference distribution sufficiently closely.
+Expected flow: mostly stable windows and no open incident, provided the generated normal observations track the reference distribution closely enough.
 
 **B. Inject drift**
 
@@ -377,15 +408,17 @@ Expected: stable windows and no open incident, provided the generated normal obs
 python scripts/live_demo_producer.py --mode drift --events 600 --transport redpanda --brokers 127.0.0.1:9092 --topic drifttrace.live.v4
 ```
 
-Expected: drifted windows, per-feature KS/PSI values, root-cause diagnostics, and an incident after the configured number of consecutive drifted windows. For the showcase bundle, the expected chain is `engagement_score → service_score → risk_indicator`.
+Expected flow: drifted windows with per-feature KS/PSI values and graph-guided root-cause diagnostics, and a drift incident once enough consecutive drifted windows are evaluated. For the showcase bundle the declared chain is `engagement_score → service_score → risk_indicator`, so `engagement_score` is reported as the root-cause candidate with `service_score` and `risk_indicator` as downstream symptoms.
 
-**C. Demonstrate recovery**
+**C. Recovery**
 
 ```powershell
 python scripts/live_demo_producer.py --mode normal --events 1000 --transport redpanda --brokers 127.0.0.1:9092 --topic drifttrace.live.v4
 ```
 
-Expected: stable windows return, and the incident closes after the configured consecutive-stable-window condition. The dashboard continues to show real KS/PSI measurements for the latest window; those measurements do not reset to zero, and prior windows remain in history.
+Expected flow: subsequent windows return to stable/warning as normal data resumes, and the incident closes once enough consecutive stable windows are evaluated. The dashboard keeps showing real KS/PSI measurements for the latest window, and prior windows remain in history.
+
+> **Results are not fixed numbers.** Exact event totals, per-window statuses, the window at which an incident opens, and the window at which it closes depend on the current monitoring state and the observations actually evaluated. Treat the flow above as the qualitative sequence (normal → drift + RCA incident → recovery), not as guaranteed counts.
 
 ### Running the producer for any other model
 
@@ -416,6 +449,53 @@ The existing synthetic showcase commands above are unchanged and remain the defa
 - Model Explanation produces a local SHAP or LIME explanation, or a clear error with retry if a request fails or times out.
 
 **Demo tip:** The live consumer processes events asynchronously. A producer can finish sending before all events have been evaluated. Give the dashboard time to catch up before judging the final count or incident state.
+
+### Troubleshooting the live demo
+
+All checks below are non-destructive — they inspect state and never delete a container, volume, or topic.
+
+- **Container health:** confirm the broker is up and lists a broker node.
+
+  ```powershell
+  docker ps --filter "name=drifttrace-redpanda-1"
+  docker exec drifttrace-redpanda-1 rpk cluster info
+  ```
+
+- **Advertised broker address:** the broker must advertise `127.0.0.1:9092`. If an older container advertises `redpanda:9092`, the Windows-host producer cannot resolve it and events never arrive. Inspect the advertised address:
+
+  ```powershell
+  docker exec drifttrace-redpanda-1 rpk cluster info
+  ```
+
+  The reported broker address should be `127.0.0.1:9092`. If it is `redpanda:9092` (or another internal hostname), re-provision the container using the new-machine command in [Terminal 1](#terminal-1--start-docker-desktop-and-redpanda) (advertising `127.0.0.1:9092`) rather than editing the running container. Do not delete the data volume as part of this.
+
+- **Topic:** confirm the demo topic exists and has received records (it is created on first produce).
+
+  ```powershell
+  docker exec drifttrace-redpanda-1 rpk topic list
+  docker exec drifttrace-redpanda-1 rpk topic describe drifttrace.live.v4
+  ```
+
+- **Port 9092 from the host:**
+
+  ```powershell
+  Test-NetConnection 127.0.0.1 -Port 9092
+  ```
+
+  Expect `TcpTestSucceeded : True`.
+
+- **Backend status:**
+
+  ```powershell
+  (Invoke-WebRequest http://127.0.0.1:8000/health).Content
+  (Invoke-WebRequest http://127.0.0.1:8000/live/status).Content
+  ```
+
+  `/live/status` should report the active model, `source` as `redpanda`, and increasing event counters while the producer runs.
+
+- **Dashboard event counts:** watch the Live Monitoring panel's events-received and windows-evaluated counters, or poll `GET /live/status` and `GET /live/windows`. Producer progress messages alone do not prove delivery — only the dashboard/API counters confirm that events reached the broker and that windows were evaluated.
+
+- **Broker recreated after the backend started:** if you stop/recreate the Redpanda container while the backend is running, restart the backend (`Ctrl+C`, then re-run the [Terminal 2](#terminal-2--start-the-backend-in-redpanda-mode) block) so it reconnects to the new broker.
 
 ## API endpoints
 
@@ -540,8 +620,10 @@ DriftTrace/
 4. **Statistical thresholds:** PSI/KS thresholds need to be chosen for the problem, sample size, and acceptable false-positive rate. Small windows can yield noisy PSI values.
 5. **Production deployment:** The project is local-first. Cloud deployment, authentication/authorization hardening, production-grade broker operations, external alert integrations, and load testing are future work.
 6. **External monitoring stack:** Prometheus/Grafana integration is not part of the current core dashboard implementation.
+7. **MLOps tooling not integrated:** MLflow, Apache Airflow, and DVC are **not** part of the running system. A `dvc.yaml`/`.dvc` scaffold and optional dependency declarations (e.g. `mlflow`, `apache-airflow` extras) exist in the repository, but there is no working integration wired into the application — the presence of these files or declared extras does not constitute functioning MLflow/Airflow/DVC support. Automatic graph learning and graph-neural-network (GNN) based RCA are also not implemented; RCA is graph-traversal over a declared dependency graph, not a learned model. Treat all of these as future work.
+8. **Containerization:** Docker is used only to run the Redpanda broker locally. The DriftTrace backend and frontend are not containerized, and there is no root-level Docker Compose file.
 
-Possible extensions include sliding windows, external alert destinations, broader model adapters, cloud deployment, automatic graph learning, temporal dependency reasoning, and graph-neural-network approaches.
+Possible extensions include sliding windows, external alert destinations, broader model adapters, cloud deployment (including managed services such as SageMaker), automatic graph learning, temporal dependency reasoning, and graph-neural-network approaches.
 
 ## Project goal in one line
 
