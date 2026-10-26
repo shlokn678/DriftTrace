@@ -6,10 +6,11 @@ import { formatNumber } from "../lib/status";
 interface Props {
   report: MonitoringReport | null;
   dependenciesAvailable?: boolean;
+  source?: "live" | "batch";
 }
 
 /** The primary RCA section: dependency graph + root-cause reasoning/evidence. */
-export function RcaSection({ report, dependenciesAvailable = true }: Props) {
+export function RcaSection({ report, dependenciesAvailable = true, source = "batch" }: Props) {
   const rca = report?.rca ?? null;
   const roots = rca?.root_cause_candidates ?? [];
   const primary = roots[0];
@@ -20,7 +21,12 @@ export function RcaSection({ report, dependenciesAvailable = true }: Props) {
       <BentoCard className="col-5" major>
         <div className="card__head">
           <MonoLabel>Dependency Graph</MonoLabel>
-          <Pill variant="accent">NetworkX RCA</Pill>
+          <span className="row row-3">
+            <Pill variant={source === "live" ? "accent" : "stable"}>
+              {source === "live" ? "Live stream" : "Batch / on-demand"}
+            </Pill>
+            <Pill variant="accent">NetworkX RCA</Pill>
+          </span>
         </div>
         <h2 id="rca-title" style={{ marginBottom: "var(--space-5)" }}>
           Trace upstream

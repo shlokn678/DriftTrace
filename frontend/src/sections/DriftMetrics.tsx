@@ -1,13 +1,14 @@
 import type { MonitoringReport } from "../api/types";
-import { BentoCard, EmptyState, MonoLabel, StatusPill } from "../components/primitives";
+import { BentoCard, EmptyState, MonoLabel, Pill, StatusPill } from "../components/primitives";
 import { formatInt, formatNumber, nodeLabel, verdictToStatus } from "../lib/status";
 
 interface Props {
   report: MonitoringReport | null;
+  source?: "live" | "batch";
 }
 
 /** Per-node KS / PSI diagnostics from the real drift report. Large numbers, mono labels. */
-export function DriftMetrics({ report }: Props) {
+export function DriftMetrics({ report, source = "batch" }: Props) {
   const nodes = report ? Object.values(report.drift.nodes) : [];
 
   return (
@@ -18,7 +19,15 @@ export function DriftMetrics({ report }: Props) {
           <h2 id="diag-title" style={{ marginTop: 6 }}>
             KS + PSI per node
           </h2>
+          {source === "live" && report && (
+            <MonoLabel>
+              window {report.window_id} · evaluated {report.timestamp}
+            </MonoLabel>
+          )}
         </div>
+        <Pill variant={source === "live" ? "accent" : "stable"}>
+          {source === "live" ? "Live stream" : "Batch / on-demand"}
+        </Pill>
       </div>
 
       {!report ? (

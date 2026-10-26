@@ -185,6 +185,13 @@ def test_live_pipeline_stable_then_drift_then_recover(active_ctx, tmp_path) -> N
     closed = incidents["history"][0]
     assert closed["status"] == "CLOSED"
     assert closed["root_cause"] == "feat_a"
+    # Last-incident details are retained AFTER close: the advanced panels can still show
+    # the most recent (closed) incident's root cause / symptom path without claiming it is
+    # active. (The history entry carries the diagnosis even though the incident is closed.)
+    last = incidents["history"][-1]
+    assert last["root_cause"] == "feat_a"
+    if last["symptom_path"]:
+        assert set(last["symptom_path"]) <= {"feat_a", "feat_b", "feat_c"}
 
 
 @pytest.mark.integration
@@ -387,17 +394,23 @@ def _activate(client, data: bytes) -> str:
     return mid
 
 
-def _run_live_window(client, cols: list[str], *, n: int = 60) -> None:
-    """Start a live session and ingest n drifted events so a window is evaluated."""
+def _run_live_window(client, cols: list[str], *, n: int = 120) -> None:
+    """Start a live session and ingest n drifted events so a FULL window is evaluated.
+
+    Waits for a window with at least the configured minimum samples (not merely the
+    trailing partial-window flush) so callers observe a real drift evaluation with
+    populated per-feature KS/PSI rather than an INSUFFICIENT_DATA partial.
+    """
     import time
 
     client.post("/live/start")
     big = dict.fromkeys(cols, 500.0)
     for _ in range(n):
         client.post("/live/ingest", json={"features": big})
-    # Give the file-tailing monitor time to form + evaluate the window.
-    for _ in range(40):
-        if client.get("/live/windows").json()["windows"]:
+    # Give the file-tailing monitor time to form + evaluate a full (>=min-samples) window.
+    for _ in range(60):
+        windows = client.get("/live/windows").json()["windows"]
+        if any(w["event_count"] >= 30 for w in windows):
             break
         time.sleep(0.1)
     client.post("/live/stop")
@@ -516,6 +529,59 @@ def test_rca_latest_not_shown_without_active_model_after_run(iso_client) -> None
     rca = iso_client.get("/rca/latest").json()
     assert rca["available"] is False
     assert rca.get("active_model") is False
+
+
+# --------------------------------------------------------------------------------------
+# Advanced-panel wiring: the live endpoints expose everything the RCA panels need
+# --------------------------------------------------------------------------------------
+@pytest.mark.integration
+def test_live_latest_exposes_per_feature_ks_psi_for_panels(iso_client) -> None:
+    """The adapted RCA panels read window.per_feature KS/PSI + RCA fields from /live/latest.
+
+    After an evaluated drifted window on a 3-column graph bundle, every drifted feature
+    must carry non-null ks_statistic, ks_p_value AND psi, and the RCA fields (primary root
+    cause + symptoms) must be populated so the live panels can render real diagnostics.
+    """
+    cols = ["age_x", "usage_x", "calls_x"]
+    _activate(iso_client, _named_bundle(cols))
+    _run_live_window(iso_client, cols)
+
+    # /live/latest (what the live panels consume) is available and carries a window.
+    latest = iso_client.get("/live/latest").json()
+    assert latest["available"] is True
+    assert latest["window"] is not None
+
+    # The evaluated full (>=min-samples) drifted window exposes real per-feature KS/PSI and
+    # dependency-based RCA, which is exactly what the adapter feeds into the panels.
+    windows = iso_client.get("/live/windows").json()["windows"]
+    drifted = [w for w in windows if w["event_count"] >= 30 and w["drifted_features"]]
+    assert drifted, "expected at least one full drifted window"
+    window = drifted[-1]
+
+    for feat in window["drifted_features"]:
+        pf = window["per_feature"][feat]
+        assert pf["ks_statistic"] is not None
+        assert pf["ks_p_value"] is not None
+        assert pf["psi"] is not None
+
+    # Dependency-based RCA populated (3-column chain graph): a primary root + symptoms.
+    assert window["dependencies_available"] is True
+    assert window["primary_root_cause"] is not None
+    assert window["symptoms"]
+
+
+@pytest.mark.integration
+def test_live_status_active_model_matches_while_running(iso_client) -> None:
+    """/live/status reports active_model true with a matching model_id + a latest window."""
+    cols = ["age_x", "usage_x", "calls_x"]
+    mid = _activate(iso_client, _named_bundle(cols))
+    _run_live_window(iso_client, cols)
+
+    status = iso_client.get("/live/status").json()
+    assert status["active_model"] is True
+    assert status["model_id"] == mid
+    assert status["latest_window"] is not None
+    assert (status["windows_evaluated"] or 0) >= 1
 
 
 # --------------------------------------------------------------------------------------

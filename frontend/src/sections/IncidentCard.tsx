@@ -3,25 +3,31 @@ import { BentoCard, EmptyState, MonoLabel, Pill } from "../components/primitives
 
 interface Props {
   report: MonitoringReport | null;
+  source?: "live" | "batch";
 }
 
 /** The latest incident / root-cause alert, straight from the real backend report. */
-export function IncidentCard({ report }: Props) {
+export function IncidentCard({ report, source = "batch" }: Props) {
   const alert = report?.alerts?.[0] ?? null;
 
   return (
     <BentoCard className="col-5" major>
       <div className="card__head">
         <MonoLabel>Root-Cause Alert</MonoLabel>
-        {alert ? (
-          <Pill variant="root" dot>
-            Incident open
+        <span className="row row-3">
+          <Pill variant={source === "live" ? "accent" : "stable"}>
+            {source === "live" ? "Live stream" : "Batch / on-demand"}
           </Pill>
-        ) : (
-          <Pill variant="stable" dot>
-            No incident
-          </Pill>
-        )}
+          {alert ? (
+            <Pill variant="root" dot>
+              Incident open
+            </Pill>
+          ) : (
+            <Pill variant="stable" dot>
+              No incident
+            </Pill>
+          )}
+        </span>
       </div>
 
       {!alert ? (

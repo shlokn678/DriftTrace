@@ -4,6 +4,7 @@ import { api } from "./api/client";
 import { useAsync } from "./hooks/useAsync";
 import { useTheme } from "./lib/theme";
 import { deriveBundle } from "./lib/derive";
+import { liveWindowToReport } from "./lib/liveAdapter";
 import { Header } from "./components/Header";
 import { Hero } from "./components/Hero";
 import { Button } from "./components/primitives";
@@ -31,11 +32,53 @@ export default function App() {
   const rca = useAsync(() => api.rcaLatest(), [nonce]);
   const metrics = useAsync(() => api.metrics(), [nonce], { pollMs: 15000 });
 
+  // Live polling (mirrors LiveMonitoring's 2000ms cadence) so the advanced panels can
+  // reflect the live session when one is running for the active model.
+  const liveStatus = useAsync(() => api.liveStatus(), [nonce], { pollMs: 2000 });
+  const liveLatest = useAsync(() => api.liveLatest(), [nonce], { pollMs: 2000 });
+  const liveIncidents = useAsync(() => api.liveIncidents(), [nonce], { pollMs: 2000 });
+
   const report = rca.data?.available ? (rca.data.report ?? null) : null;
   const bundle = useMemo(
     () => deriveBundle(report, metrics.data, modelInfo.data),
     [report, metrics.data, modelInfo.data],
   );
+
+  // Source precedence: use the live stream only when a live session for the CURRENTLY
+  // ACTIVE model has evaluated at least one window (model_id must match), otherwise fall
+  // back to the batch /rca/latest report. Never mix or leak across models.
+  const activeId = activeModel.data?.active ? (activeModel.data.model_id ?? null) : null;
+  const { panelReport, source, liveDependenciesAvailable } = useMemo(() => {
+    const liveUsable =
+      liveStatus.data?.active_model === true &&
+      liveStatus.data.model_id === activeId &&
+      (liveStatus.data.windows_evaluated ?? 0) >= 1 &&
+      liveLatest.data?.available === true &&
+      !!liveLatest.data.window &&
+      liveLatest.data.window.model_id === activeId;
+    if (liveUsable && liveLatest.data?.window) {
+      const window = liveLatest.data.window;
+      const incident =
+        liveIncidents.data?.open ??
+        liveIncidents.data?.history?.[liveIncidents.data.history.length - 1] ??
+        null;
+      return {
+        panelReport: liveWindowToReport(window, incident),
+        source: "live" as const,
+        liveDependenciesAvailable: window.dependencies_available,
+      };
+    }
+    return {
+      panelReport: report,
+      source: "batch" as const,
+      liveDependenciesAvailable: false,
+    };
+  }, [liveStatus.data, liveLatest.data, liveIncidents.data, activeId, report]);
+
+  const dependenciesAvailable =
+    source === "live"
+      ? liveDependenciesAvailable
+      : (activeModel.data?.dependencies_available ?? false);
 
   const refreshing =
     health.loading ||
@@ -104,16 +147,17 @@ export default function App() {
         {advanced && (
           <div className="stack stack-5">
             <RcaSection
-              report={report}
-              dependenciesAvailable={activeModel.data?.dependencies_available ?? false}
+              report={panelReport}
+              dependenciesAvailable={dependenciesAvailable}
+              source={source}
             />
 
             <section className="section bento">
-              <IncidentCard report={report} />
+              <IncidentCard report={panelReport} source={source} />
               <ExplanationPanel features={activeModel.data?.features ?? []} />
             </section>
 
-            <DriftMetrics report={report} />
+            <DriftMetrics report={panelReport} source={source} />
 
             <section className="section bento">
               <OperatorActions

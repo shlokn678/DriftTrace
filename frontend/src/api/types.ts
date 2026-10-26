@@ -207,6 +207,9 @@ export interface LivePerFeature {
 
 export interface LiveWindowResult {
   sequence: number;
+  model_id?: string | null;
+  model_version?: string | null;
+  session_id?: string | null;
   window_id: string;
   start_timestamp: string | null;
   end_timestamp: string | null;
@@ -243,6 +246,8 @@ export interface LiveIncident {
 export interface LiveStatusResponse {
   status: LiveStatus;
   error?: string | null;
+  session_id?: string | null;
+  active_model?: boolean;
   model_id?: string | null;
   model_version?: string | null;
   model_name?: string | null;
@@ -260,16 +265,23 @@ export interface LiveStatusResponse {
 
 export interface LiveWindowsResponse {
   windows: LiveWindowResult[];
+  active_model?: boolean;
+  active_model_id?: string | null;
 }
 
 export interface LiveLatestResponse {
   available: boolean;
   window: LiveWindowResult | null;
+  active_model?: boolean;
 }
 
 export interface LiveIncidentsResponse {
   open: LiveIncident | null;
   history: LiveIncident[];
+  active_model?: boolean;
+  model_id?: string | null;
+  model_version?: string | null;
+  session_id?: string | null;
 }
 
 // ---- Phase 5: model onboarding ----
