@@ -43,6 +43,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
     });
   } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      throw new ApiError(
+        "explanation timed out — the model may have many features; try again or switch to LIME",
+      );
+    }
     throw new ApiError(
       `Network error contacting the DriftTrace API (${(err as Error).message})`,
     );
@@ -117,10 +122,15 @@ export const api = {
       body: JSON.stringify({ features, request_id: requestId ?? null }),
     }),
   rcaLatest: () => request<RcaLatestResponse>("/rca/latest"),
-  explain: (features: Record<string, FeatureValue>, method: "shap" | "lime") =>
+  explain: (
+    features: Record<string, FeatureValue>,
+    method: "shap" | "lime",
+    signal?: AbortSignal,
+  ) =>
     request<Explanation>("/explain", {
       method: "POST",
       body: JSON.stringify({ features, method }),
+      signal,
     }),
   metrics: async (): Promise<Metrics> => parseMetrics(await requestText("/metrics")),
   runDriftTest: (intensity = 2, feature: string | null = null, n = 300, seed = 7) =>

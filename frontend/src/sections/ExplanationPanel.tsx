@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import type { Explanation, ExplanationFactor } from "../api/types";
@@ -39,26 +39,42 @@ export function ExplanationPanel({ features }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showTech, setShowTech] = useState(false);
+  // Guards against superseded responses; the controller lets us abort in-flight work.
+  const reqIdRef = useRef(0);
+  const ctrlRef = useRef<AbortController | null>(null);
 
   // Seed one numeric input per feature (default 0) when the active model changes.
+  // Also abort any in-flight explain and reset state so a stale/superseded response
+  // cannot leave the CURRENT model's panel stuck.
   useEffect(() => {
+    ctrlRef.current?.abort();
+    reqIdRef.current += 1;
     setValues((prev) => {
       const next: Record<string, number> = {};
       for (const f of features) next[f] = prev[f] ?? 0;
       return next;
     });
     setExp(null);
+    setLoading(false);
+    setError(null);
   }, [features]);
 
   async function run() {
+    const myId = ++reqIdRef.current;
+    const ctrl = new AbortController();
+    ctrlRef.current = ctrl;
+    const timer = setTimeout(() => ctrl.abort(), 35000);
     setLoading(true);
     setError(null);
     try {
-      setExp(await api.explain(values, method));
+      const result = await api.explain(values, method, ctrl.signal);
+      if (reqIdRef.current === myId) setExp(result);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : (err as Error).message);
+      if (reqIdRef.current === myId)
+        setError(err instanceof ApiError ? err.message : (err as Error).message);
     } finally {
-      setLoading(false);
+      clearTimeout(timer);
+      if (reqIdRef.current === myId) setLoading(false);
     }
   }
 
@@ -128,7 +144,12 @@ export function ExplanationPanel({ features }: Props) {
           {loading ? (
             <LoadingState label="Computing explanation" />
           ) : error ? (
-            <ErrorState message={error} />
+            <div className="stack stack-3">
+              <ErrorState message={error} />
+              <Button variant="default" onClick={run}>
+                Retry
+              </Button>
+            </div>
           ) : !exp ? (
             <EmptyState
               title="No explanation yet"
