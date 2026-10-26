@@ -153,9 +153,16 @@ def create_app(settings: ServingSettings | None = None) -> Any:
     from contextlib import asynccontextmanager
 
     @asynccontextmanager
-    async def lifespan(_app: Any) -> AsyncIterator[None]:
+    async def lifespan(app_: Any) -> AsyncIterator[None]:
         # No model is loaded at startup. The operator uploads + activates a bundle.
         yield
+        # On shutdown, stop any running live monitor so its background thread exits.
+        manager = getattr(app_.state, "live_manager", None)
+        if manager is not None:
+            try:
+                manager.stop()
+            except Exception as exc:  # noqa: BLE001 - shutdown must not raise
+                logger.warning("live monitor stop on shutdown failed: %s", exc)
 
     app = FastAPI(title="DriftTrace API", version="2.0", lifespan=lifespan)
     app.state.sink = sink
@@ -217,16 +224,45 @@ def create_app(settings: ServingSettings | None = None) -> Any:
     # ---- monitoring / RCA ------------------------------------------------------------
     @app.get("/rca/latest")
     def rca_latest() -> dict:
-        """Return the latest persisted monitoring/RCA report, or a not-available status."""
+        """Return the latest persisted monitoring/RCA report for the ACTIVE model.
+
+        State isolation: a persisted report is only presented as the current result when
+        a model is active AND the report belongs to that model (its ``model_version`` is
+        the active model's id). With no active model, or when the report belongs to a
+        previous model, this returns ``available: False`` with an explicit reason so the
+        UI never shows a stale model's drift/root-cause as the current state. The report
+        file itself is preserved on disk (persistence is not deleted here).
+        """
         import json
+
+        ctx = _active_ctx()
+        if ctx is None:
+            return {"available": False, "active_model": False, "detail": "no active model"}
 
         latest = settings.reports_dir_path / "latest_rca.json"
         if not latest.exists():
-            return {"available": False, "detail": "no monitoring report yet"}
-        report = json.loads(latest.read_text(encoding="utf-8"))
-        ctx = _active_ctx()
-        graph_available = ctx is not None and ctx.graph is not None
-        return {"available": True, "report": report, "dependencies_available": graph_available}
+            return {"available": False, "active_model": True, "detail": "no monitoring report yet"}
+        try:
+            report = json.loads(latest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"available": False, "active_model": True, "detail": "no monitoring report yet"}
+
+        # The report's model_version is set to the producing model's id (see build_report
+        # callers). Only present it when it matches the current active model.
+        if report.get("model_version") != ctx.model_id:
+            return {
+                "available": False,
+                "active_model": True,
+                "detail": "latest report belongs to a previous model",
+            }
+
+        graph_available = ctx.graph is not None
+        return {
+            "available": True,
+            "active_model": True,
+            "report": report,
+            "dependencies_available": graph_available,
+        }
 
     @app.post("/demo/run-drift-test")
     def run_drift_test_endpoint(req: DriftTestRequest) -> dict:
@@ -392,6 +428,11 @@ def create_app(settings: ServingSettings | None = None) -> Any:
             active=(REGISTRY.active_model_id == onboarded.model_id),
             message=onboarded.message,
         )
+
+    # ---- live monitoring (additive; orchestrates the existing drift/RCA engines) -----
+    from drifttrace.serving.live_routes import register_live_routes
+
+    register_live_routes(app, settings)
 
     return app
 

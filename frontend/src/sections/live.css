@@ -1,0 +1,87 @@
+/* Live Monitoring section styles (scoped to .live-* classes; additive). */
+
+.live-counters {
+  gap: var(--space-4);
+}
+
+.live-counter {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 10px);
+  background: var(--surface-2, var(--surface));
+}
+
+.live-chip {
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.live-chip--drift {
+  background: var(--status-drift-surface);
+  color: var(--status-drift);
+}
+
+.live-chip--root {
+  background: var(--status-root);
+  color: var(--surface);
+  font-weight: 700;
+}
+
+.live-chip--symptom {
+  background: var(--status-drift-surface);
+  color: var(--status-drift);
+}
+
+.live-spark {
+  width: 100%;
+  height: 48px;
+  display: block;
+}
+
+.live-spark__line {
+  fill: none;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.live-spark__line--psi {
+  stroke: var(--status-drift, #d9534f);
+}
+
+.live-spark__line--drift {
+  stroke: var(--accent, #4a7);
+}
+
+.live-spark__threshold {
+  stroke: var(--text-tertiary, #999);
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.live-history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.live-history__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 6px 10px;
+  border-radius: var(--radius-md, 10px);
+  border: 1px solid var(--border);
+}
+
+.live-history__id {
+  min-width: 48px;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.live-history__meta {
+  font-size: 0.82rem;
+}

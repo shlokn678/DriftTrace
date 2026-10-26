@@ -10,6 +10,10 @@ import type {
   Explanation,
   FeatureValue,
   HealthResponse,
+  LiveIncidentsResponse,
+  LiveLatestResponse,
+  LiveStatusResponse,
+  LiveWindowsResponse,
   Metrics,
   ModelInfoResponse,
   ModelStatusResponse,
@@ -139,4 +143,12 @@ export const api = {
     }),
   deactivateModel: () =>
     request<ActiveModelResponse>("/models/deactivate", { method: "POST" }),
+  // ---- Live monitoring (additive) ----
+  liveStart: () => request<LiveStatusResponse>("/live/start", { method: "POST" }),
+  liveStop: () => request<LiveStatusResponse>("/live/stop", { method: "POST" }),
+  liveStatus: () => request<LiveStatusResponse>("/live/status"),
+  liveWindows: (limit = 50) =>
+    request<LiveWindowsResponse>(`/live/windows?limit=${encodeURIComponent(limit)}`),
+  liveLatest: () => request<LiveLatestResponse>("/live/latest"),
+  liveIncidents: () => request<LiveIncidentsResponse>("/live/incidents"),
 };

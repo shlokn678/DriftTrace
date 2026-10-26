@@ -9,6 +9,7 @@ import { Hero } from "./components/Hero";
 import { Button } from "./components/primitives";
 import { Onboarding } from "./sections/Onboarding";
 import { SimpleOverview } from "./sections/SimpleOverview";
+import { LiveMonitoring } from "./sections/LiveMonitoring";
 import { RcaSection } from "./sections/RcaSection";
 import { DriftMetrics } from "./sections/DriftMetrics";
 import { IncidentCard } from "./sections/IncidentCard";
@@ -76,6 +77,9 @@ export default function App() {
 
         {/* Onboard a model with minimal input, then activate it ("Use this model"). */}
         <Onboarding onReady={bump} onActivated={bump} />
+
+        {/* Live continuous monitoring of the active model (additive; polls while running). */}
+        <LiveMonitoring hasActiveModel={activeModel.data?.active ?? false} />
 
         {/* Progressive disclosure: everything technical lives behind Advanced. */}
         <section className="section" aria-label="Advanced details toggle">

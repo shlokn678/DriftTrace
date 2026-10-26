@@ -509,7 +509,7 @@ A record created around a model prediction so monitoring information can be coll
 
 A group of recent observations analyzed together instead of checking one prediction at a time.
 
-**Here:** the current verified demo primarily uses controlled/on-demand monitoring scenarios; continuous broker-backed monitoring is a planned next extension.
+**Here:** both paths exist — the batch/on-demand drift test and the continuous live monitor (Section 7a), which groups incoming events into tumbling windows (default 100 events) and evaluates each window with the same drift + RCA engines.
 
 ### SHAP
 
@@ -608,25 +608,188 @@ The strongest controlled scenarios produced:
 
 The clean single-root RCA result depends on injecting drift into the declared dependency chain. Drift does not automatically propagate through the graph; the graph is used for tracing related drift.
 
-### Live monitoring limitation
+### Live monitoring
 
-The project contains streaming/Redpanda adapter code, but the current verified demo is **on-demand/batch rather than always-on live broker monitoring**.
-
-The next planned extension is:
+Continuous live monitoring is now implemented **in addition to** the batch/on-demand path
+(see Section 7a). A background consumer groups incoming prediction events into tumbling
+windows and runs the same KS + PSI drift engine and dependency-graph RCA per window, with a
+consecutive-window incident lifecycle and persistent history:
 
 ```text
 live predictions
       ↓
-event stream
+event stream (Redpanda topic, or broker-free local event log)
       ↓
-sliding / tumbling window
+tumbling window (default 100 events)
       ↓
-automatic KS + PSI
+EXISTING KS + PSI
       ↓
-RCA
+EXISTING RCA
       ↓
-alert / dashboard
+incident / alert / dashboard history
 ```
+
+The verified end-to-end flow (NORMAL → STABLE windows → DRIFT → RCA root cause + symptoms →
+OPEN incident → recovery) was demonstrated over the real HTTP API with the demo producer.
+The broker-free file source is the default so the demo runs with no Kafka install; the
+Redpanda broker path is available but a live broker is not exercised in the default demo.
+
+---
+
+## 7a. Live Monitoring (continuous)
+
+DriftTrace now includes a **continuous live-monitoring path in addition to** the existing
+batch/on-demand path. Both feed the **same** drift and RCA engines — there is one drift
+implementation (KS + PSI) and one RCA implementation; the live layer only *orchestrates*
+them for a continuously-arriving stream of prediction events.
+
+```text
+live prediction events
+        ↓
+Redpanda topic  (or broker-free local event log)
+        ↓
+monitoring consumer  (background thread)
+        ↓
+tumbling windows (default 100 events)
+        ↓
+EXISTING KS + PSI drift engine
+        ↓
+EXISTING dependency-graph RCA engine
+        ↓
+root candidate + downstream symptoms
+        ↓
+EXISTING root-cause alerting + incident lifecycle
+        ↓
+persistent monitoring history → live dashboard
+```
+
+### What a prediction event is
+
+A standardized `PredictionEvent` (see `src/drifttrace/streaming/event.py`) carrying at
+least: `event_id`, `timestamp`, `model_id` / `model_version`, input `features`, the
+`prediction`/`output`, and optional `probability`. The same event the serving API already
+emits after every `/predict` is reused — no new or conflicting schema was introduced.
+
+### The deployed model stays active
+
+Live monitoring runs against the **currently active model**. A new model is **not** created
+per window. The reference baseline (`reference.csv`) remains the baseline for that model
+version until the operator replaces the model or intentionally registers a new baseline.
+DriftTrace never auto-updates the baseline.
+
+### How tumbling windows work
+
+Events are grouped into fixed-size, non-overlapping windows (default **100 events**,
+configurable with `DRIFTTRACE_LIVE_WINDOW_SIZE`). When a window fills, DriftTrace runs the
+existing KS + PSI engine against the active model's reference baseline, runs graph RCA when
+a `graph.json` was provided, updates alerting/incident state, persists the window result,
+and exposes it to the dashboard.
+
+### Drift over time
+
+Every evaluated window is persisted to `reports/live/windows.jsonl` with its `window_id`,
+start/end timestamps, event count, drift status, per-feature KS statistic / KS p-value /
+PSI, drifted features, RCA root candidate(s) and symptoms, and incident status. The
+dashboard renders the progression (e.g. STABLE → STABLE → WARNING → DRIFT → DRIFT) and a
+PSI / drifted-feature trend.
+
+### Incident lifecycle (focused alerting, not spam)
+
+A simple, configurable consecutive-window policy groups related drifted windows into **one
+continuing incident** instead of a separate alert per window:
+
+- `DRIFTTRACE_LIVE_INCIDENT_OPEN_AFTER` (default **2**) consecutive drifted windows → OPEN
+- `DRIFTTRACE_LIVE_INCIDENT_CLOSE_AFTER` (default **3**) consecutive stable windows → CLOSE
+
+This does **not** redefine drift. A window's drift verdict comes verbatim from the existing
+drift engine; the policy only decides when a run of verdicts is treated as one incident.
+
+### Graph RCA per window
+
+For a graph-enabled model, each drifted window is traced with the existing RCA engine. For
+the showcase chain `engagement_score → service_score → risk_indicator → prediction`, a
+window where those nodes drift yields root candidate `engagement_score` with
+`service_score` and `risk_indicator` as symptoms. No-graph models still detect drift but
+report no symptom chain (`dependencies_available: false`); no causal relationship is
+fabricated.
+
+### Broker: optional and fault-tolerant
+
+The default live source is **broker-free** (`DRIFTTRACE_LIVE_SOURCE=file`): the monitor
+tails the local event log that `/predict` already writes, and `POST /live/ingest` lets a
+producer push events over HTTP with no Kafka install. Set `DRIFTTRACE_LIVE_SOURCE=redpanda`
+to consume from a Redpanda/Kafka topic. If the broker is unavailable, `/live/start` returns
+a status of `ERROR` (surfaced in the UI) and the existing prediction and batch/on-demand
+monitoring paths keep working.
+
+### Live-monitoring API
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /live/start` | Start live monitoring for the active model (409 if none active) |
+| `POST /live/stop` | Stop live monitoring |
+| `GET /live/status` | Status (RUNNING/STOPPED/ERROR), counters, current window progress, latest result |
+| `GET /live/windows?limit=N` | Persisted window history (drift over time) |
+| `GET /live/latest` | Latest completed window result |
+| `GET /live/incidents` | Open incident + closed incident history |
+| `POST /live/ingest` | Broker-free event submission (demo/tests) |
+
+The existing endpoints (`/predict`, `/demo/run-drift-test`, `/rca/latest`, `/models/*`,
+`/explain`, …) are unchanged.
+
+### Running the live demo
+
+1. **(Optional) Start Redpanda** — only needed for `DRIFTTRACE_LIVE_SOURCE=redpanda`. The
+   broker-free default needs nothing here. A common local option is the Redpanda container
+   via `rpk`/`docker`; the normal DriftTrace demo does **not** require it:
+
+   ```bash
+   # optional, only for the broker-backed path
+   rpk container start          # or your preferred local Redpanda
+   # then run the backend with:  DRIFTTRACE_LIVE_SOURCE=redpanda
+   ```
+
+2. **Start the backend** (window size 100 is the default; smaller windows complete faster):
+
+   ```bash
+   python -m drifttrace.cli.main serve --host 127.0.0.1 --port 8000
+   ```
+
+3. **Start the frontend** and open the Live Monitoring section:
+
+   ```bash
+   cd frontend && npm run dev
+   ```
+
+4. **Activate a model** (the 8-feature graph bundle is the clearest showcase):
+
+   Upload `artifacts/test_models/synthetic_gradient_boosting/synthetic_gradient_boosting.drift.zip`
+   in the dashboard (or via `POST /models/upload`) and activate it.
+
+5. **Start live monitoring** — click **Start** in the Live Monitoring section (or
+   `POST /live/start`).
+
+6. **Run the demo producer** — NORMAL traffic first, then switch to DRIFT:
+
+   ```bash
+   # stable traffic, then a drift burst on the declared chain, in one run:
+   python scripts/live_demo_producer.py --mode normal --events 300 --then-drift 300 --interval 0.02
+   ```
+
+   Configurable: `--mode {normal,drift}`, `--events`, `--interval`, `--then-drift`,
+   `--k` (shift in std units), `--seed`, `--transport {http,redpanda}`.
+
+7. **Watch the dashboard**: stable windows appear first, then DRIFT windows with
+   `engagement_score` as the root cause and `service_score`/`risk_indicator` as symptoms,
+   an incident opens, and the PSI trend climbs. Returning to NORMAL traffic lets the
+   incident close after the configured number of stable windows.
+
+> **Honest demo note.** Clean *stable* windows require the producer's NORMAL traffic to
+> reproduce the reference distribution faithfully and a window large enough for stable
+> binning. The producer bootstraps whole reference rows for this reason. Very
+> high-dimensional models with small windows can show incidental per-window drift from
+> small-sample PSI binning variance — the 8-feature graph bundle with the default window
+> of 100 gives the clearest NORMAL → DRIFT → RCA → incident progression.
 
 ---
 
@@ -651,7 +814,7 @@ DriftTrace/
 ## 9. Important Limitations
 
 1. **scikit-learn is the only implemented model adapter.** Other frameworks such as XGBoost, LightGBM, ONNX and PyTorch are future work.
-2. **Continuous broker-backed monitoring is not the current demo path.** The current verified monitoring flow is on-demand/batch.
+2. **Live monitoring is implemented, but the default demo uses a broker-free source.** Continuous tumbling-window live monitoring (Section 7a) runs over a broker-free local event log by default; the Redpanda/Kafka adapter is wired in but a live broker is not exercised in the default demo. The batch/on-demand path remains fully available.
 3. **RCA depends on graph quality.** A declared graph describes the dependency information available to the system; it does not automatically prove causal relationships.
 4. **A clean one-root showcase requires controlled drift aligned with the declared graph chain.** Broad all-feature drift can naturally create multiple independent root candidates.
 5. **The current project is local-first.** Production cloud deployment and dashboard infrastructure are future/stretch work.
@@ -660,9 +823,10 @@ DriftTrace/
 
 ## 10. Future Scope
 
-- continuous Kafka/Redpanda monitoring with sliding/tumbling windows
-- always-on asynchronous drift monitoring
-- alert/dashboard integration
+- live broker-backed monitoring verified against a running Redpanda broker (the adapter and
+  continuous tumbling-window pipeline are implemented; see Section 7a)
+- sliding windows (in addition to the implemented tumbling windows)
+- alert/dashboard integration with external systems
 - broader model adapters
 - Prometheus / Grafana integration
 - cloud deployment such as AWS SageMaker

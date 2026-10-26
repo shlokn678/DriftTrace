@@ -195,6 +195,83 @@ export interface DriftTestResponse {
 // ---- Metrics ----
 export type Metrics = Record<string, number>;
 
+// ---- Live monitoring (additive extension) ----
+export type LiveStatus = "RUNNING" | "STOPPED" | "ERROR";
+
+export interface LivePerFeature {
+  verdict: Verdict;
+  ks_statistic: number | null;
+  ks_p_value: number | null;
+  psi: number | null;
+}
+
+export interface LiveWindowResult {
+  sequence: number;
+  window_id: string;
+  start_timestamp: string | null;
+  end_timestamp: string | null;
+  event_count: number;
+  status: "STABLE" | "WARNING" | "DRIFT";
+  drifted_features: string[];
+  drifted_count: number;
+  per_feature: Record<string, LivePerFeature>;
+  dependencies_available: boolean;
+  has_root_cause: boolean;
+  root_cause_candidates: string[];
+  primary_root_cause: string | null;
+  symptoms: string[];
+  primary_symptom_path: string[];
+  alerts: AlertRecord[];
+  incident_id: string | null;
+  incident_status: string | null;
+  evaluated_at: string;
+}
+
+export interface LiveIncident {
+  incident_id: string;
+  status: "OPEN" | "CLOSED";
+  opened_window: string;
+  opened_at: string;
+  root_cause: string | null;
+  symptom_path: string[];
+  drifted_windows: number;
+  last_window: string | null;
+  closed_window: string | null;
+  closed_at: string | null;
+}
+
+export interface LiveStatusResponse {
+  status: LiveStatus;
+  error?: string | null;
+  model_id?: string | null;
+  model_version?: string | null;
+  model_name?: string | null;
+  dependencies_available?: boolean;
+  source?: string;
+  window_size?: number;
+  events_received?: number;
+  current_window_count?: number;
+  windows_evaluated?: number;
+  started_at?: string | null;
+  updated_at?: string | null;
+  latest_window?: LiveWindowResult | null;
+  open_incident?: LiveIncident | null;
+}
+
+export interface LiveWindowsResponse {
+  windows: LiveWindowResult[];
+}
+
+export interface LiveLatestResponse {
+  available: boolean;
+  window: LiveWindowResult | null;
+}
+
+export interface LiveIncidentsResponse {
+  open: LiveIncident | null;
+  history: LiveIncident[];
+}
+
 // ---- Phase 5: model onboarding ----
 export interface UploadModelResponse {
   model_id: string | null;

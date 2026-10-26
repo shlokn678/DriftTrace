@@ -37,3 +37,5 @@ reg.xml
 reg_result.txt
 # Isolated Airflow validation venv (Phase 2; not part of the deliverable)
 /.venv-airflow
+# Agent workflow git worktrees (not part of the deliverable)
+/.worktrees/

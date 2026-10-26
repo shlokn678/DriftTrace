@@ -17,9 +17,20 @@ interface Props {
  * lives behind View Details.
  */
 export function SimpleOverview({ bundle, report, healthy, ready, activeModel }: Props) {
-  const { driftStatus, rootCause, driftedCount } = bundle;
-
   const hasActive = activeModel?.active ?? false;
+
+  // Defensive state-isolation guard: drift / root-cause belong to the ACTIVE model only.
+  // With no active model, never present a previous model's persisted result as current -
+  // even if the backend were to return one. The backend also scopes this (/rca/latest),
+  // so this is a second line of defense matching the "no model -> no drift" contract.
+  const { driftStatus, rootCause, driftedCount } = hasActive
+    ? bundle
+    : {
+        driftStatus: { text: "No model", status: "insufficient" as const },
+        rootCause: null,
+        driftedCount: 0,
+      };
+
   const modelName = hasActive ? (activeModel?.name ?? "model") : "None";
   const modelTask = activeModel?.task ?? null;
   const depsAvailable = activeModel?.dependencies_available ?? false;
@@ -33,7 +44,8 @@ export function SimpleOverview({ bundle, report, healthy, ready, activeModel }: 
           ? { text: "Operational", status: "stable" as const }
           : { text: "Not ready", status: "warning" as const };
 
-  const affected = report?.drift.drifted_nodes ?? [];
+  // Only treat the report's affected features as current when a model is active.
+  const affected = hasActive ? (report?.drift.drifted_nodes ?? []) : [];
 
   return (
     <div className="stack stack-5" id="overview">

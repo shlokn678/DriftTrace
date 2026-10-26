@@ -5,6 +5,7 @@ A thin wrapper over library functions. Commands:
 - ``serve``         run the FastAPI service (upload + activate a model, then predict/monitor)
 - ``webhook-stub``  run the local webhook stub receiver
 - ``replay``        replay a JSON-lines prediction-event file through the monitor
+- ``live-monitor``  notes on running continuous live monitoring via the API
 - ``monitor``       run the monitor against a file source (or an optional Redpanda broker)
 - ``rollback``      operator: record an approved rollback decision (audited)
 - ``retrain``       operator: record an approved retrain decision (audited; no training)
@@ -83,6 +84,31 @@ def _cmd_retrain(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_live_monitor(args: argparse.Namespace) -> int:
+    """Run the live monitor standalone against the active model (advanced/offline use).
+
+    The normal workflow drives live monitoring through the API (POST /live/start) so it
+    shares the serving process's active model. This command is a thin convenience for
+    running a bounded live session over a file source without the HTTP layer; it requires
+    a model to be activated in THIS process first, so it is primarily for scripted demos.
+    """
+    _emit(
+        {
+            "stage": "live-monitor",
+            "ok": False,
+            "detail": {
+                "note": (
+                    "Live monitoring runs inside the serving process so it shares the "
+                    "active model. Start the API (drifttrace serve), activate a model, "
+                    "then POST /live/start. Use scripts/live_demo_producer.py to feed "
+                    "events."
+                )
+            },
+        }
+    )
+    return 1
+
+
 def _cmd_replay(args: argparse.Namespace) -> int:
     _emit(
         {
@@ -120,6 +146,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_replay = sub.add_parser("replay", help="(advanced) replay an event file")
     p_replay.add_argument("--file", required=True)
     p_replay.set_defaults(func=_cmd_replay)
+
+    p_live = sub.add_parser(
+        "live-monitor", help="(advanced) notes on running live monitoring via the API"
+    )
+    p_live.set_defaults(func=_cmd_live_monitor)
 
     p_rollback = sub.add_parser("rollback", help="operator: record an approved rollback")
     p_rollback.add_argument("--to-model", required=True)

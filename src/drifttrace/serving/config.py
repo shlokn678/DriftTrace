@@ -22,6 +22,16 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return val.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_int(name: str, default: int) -> int:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        return default
+
+
 @dataclass
 class ServingSettings:
     """Resolved serving configuration."""
@@ -32,6 +42,13 @@ class ServingSettings:
     event_log_path: Path
     reports_dir_path: Path
     cors_allow_origins: list[str]
+    # Live-monitoring settings (additive). Defaults keep the existing paths unchanged;
+    # live monitoring is opt-in via POST /live/start.
+    live_source: str = "file"
+    live_window_size: int = 100
+    live_min_window_samples: int = 30
+    live_incident_open_after: int = 2
+    live_incident_close_after: int = 3
 
 
 def get_serving_settings() -> ServingSettings:
@@ -53,4 +70,13 @@ def get_serving_settings() -> ServingSettings:
             ).split(",")
             if o.strip()
         ],
+        # Live monitoring: default to the broker-free file source so the demo runs with
+        # no Kafka install; set DRIFTTRACE_LIVE_SOURCE=redpanda to use a running broker.
+        live_source=os.environ.get(
+            "DRIFTTRACE_LIVE_SOURCE", "redpanda" if _env_bool("DRIFTTRACE_USE_REDPANDA") else "file"
+        ),
+        live_window_size=_env_int("DRIFTTRACE_LIVE_WINDOW_SIZE", 100),
+        live_min_window_samples=_env_int("DRIFTTRACE_LIVE_MIN_WINDOW_SAMPLES", 30),
+        live_incident_open_after=_env_int("DRIFTTRACE_LIVE_INCIDENT_OPEN_AFTER", 2),
+        live_incident_close_after=_env_int("DRIFTTRACE_LIVE_INCIDENT_CLOSE_AFTER", 3),
     )
