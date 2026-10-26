@@ -45,6 +45,10 @@ class MonitoringReport:
     # so the UI can render the graph with arrows following the real dependency direction
     # rather than the drift report's feature order. Derived from the declared graph only.
     graph_nodes: list[str] = field(default_factory=list)
+    # Declared dependency EDGES as [parent, child] pairs (the model-output node included),
+    # so the UI draws an arrow ONLY where a real edge exists - never inferring edges from
+    # display order. Derived from the declared graph only.
+    graph_edges: list[list[str]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -131,6 +135,9 @@ def build_report(
     # yield an empty list and the UI keeps its reported order. ``feature_nodes`` already
     # excludes the model-output node and is returned in topological order.
     graph_nodes = list(graph.feature_nodes())
+    # Declared edges as [parent, child] pairs (authoritative; the UI draws arrows only
+    # for these, never inferring edges from node display order).
+    graph_edges = graph.edge_list()
     return MonitoringReport(
         report_id=new_report_id(),
         window_id=drift.window_id,
@@ -145,4 +152,5 @@ def build_report(
         rca=rca.to_dict(),
         alerts=alerts or [],
         graph_nodes=graph_nodes,
+        graph_edges=graph_edges,
     )

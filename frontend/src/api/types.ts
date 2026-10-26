@@ -128,6 +128,8 @@ export interface MonitoringReport {
   alerts: AlertRecord[];
   /** Declared dependency order (parents before children) for graph rendering. */
   graph_nodes?: string[];
+  /** Declared dependency edges as [parent, child] pairs; arrows are drawn only for these. */
+  graph_edges?: string[][];
 }
 
 export interface RcaLatestResponse {
@@ -214,6 +216,8 @@ export interface LiveWindowResult {
   session_id?: string | null;
   /** Declared dependency order (parents before children); empty for no-graph models. */
   graph_nodes?: string[];
+  /** Declared dependency edges as [parent, child] pairs; empty for no-graph models. */
+  graph_edges?: string[][];
   window_id: string;
   start_timestamp: string | null;
   end_timestamp: string | null;

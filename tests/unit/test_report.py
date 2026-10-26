@@ -114,6 +114,36 @@ def test_report_graph_nodes_follow_dependency_direction_not_feature_order(graph)
 
 
 @pytest.mark.unit
+def test_report_graph_edges_are_declared_edges_not_consecutive_order() -> None:
+    """Regression (Task 1): the report must expose the DECLARED edges so the UI draws
+    arrows only for real dependencies - never between consecutively-displayed but
+    unrelated features. Here feature_a -> feature_b is the only feature edge; an unrelated
+    stable feature 'extra' has NO edge and must NOT be connected to anything."""
+    from drifttrace.bundle.graph_json import graph_from_edges
+
+    g = graph_from_edges([["feature_a", "feature_b"]])
+    drift = DriftReport(window_id="w0", baseline_version="1")
+    # Report lists an unrelated stable feature between the chain nodes in dict order.
+    for n in ("feature_a", "extra", "feature_b"):
+        v = str(Verdict.DRIFT) if n in ("feature_a", "feature_b") else str(Verdict.STABLE)
+        drift.nodes[n] = NodeDriftResult(
+            node=n, verdict=v, ks={"verdict": v}, psi={"verdict": v, "psi": 0.5}
+        )
+    rca = analyze(drift, g)
+    d = build_report(drift, rca, g, model_version="1").to_dict()
+
+    edges = {tuple(e) for e in d["graph_edges"]}
+    # Only the declared feature edge (+ the leaf feature -> output edge) exist.
+    assert ("feature_a", "feature_b") in edges
+    assert ("feature_b", "prediction") in edges
+    # No fabricated edge touches the unrelated stable feature, and no edge is inferred
+    # from the dict/display order (e.g. feature_a -> extra or extra -> feature_b).
+    assert not any("extra" in e for e in edges)
+    assert ("feature_a", "extra") not in edges
+    assert ("extra", "feature_b") not in edges
+
+
+@pytest.mark.unit
 def test_report_lifecycle_evidence_present(graph) -> None:
     drift = _drift_report(["feature_a"])
     rca = analyze(drift, graph)

@@ -145,5 +145,8 @@ export function liveWindowToReport(
         : window.primary_root_cause
           ? [window.primary_root_cause, ...window.primary_symptom_path]
           : [],
+    // Declared edges so the Trace Upstream diagram draws arrows only where a real edge
+    // exists (never between unrelated/stable features). Empty for no-graph models.
+    graph_edges: window.graph_edges ?? [],
   };
 }

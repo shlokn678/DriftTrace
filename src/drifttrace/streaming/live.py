@@ -192,6 +192,7 @@ def build_window_result(
     model_version: str | None = None,
     session_id: str | None = None,
     graph_nodes: list[str] | None = None,
+    graph_edges: list[list[str]] | None = None,
 ) -> dict:
     """Shape one window's existing-engine output into a persisted history record.
 
@@ -236,6 +237,7 @@ def build_window_result(
         "model_version": model_version,
         "session_id": session_id,
         "graph_nodes": list(graph_nodes) if graph_nodes else [],
+        "graph_edges": [list(e) for e in graph_edges] if graph_edges else [],
         "window_id": outcome.window_id,
         "start_timestamp": start_ts,
         "end_timestamp": end_ts,
@@ -431,6 +433,7 @@ class LiveMonitor:
         # provided. For no-graph models we use the trivial graph (features independent),
         # so there is no meaningful ordering and we leave it empty.
         graph_nodes = list(self.ctx.graph.feature_nodes()) if self.ctx.graph is not None else None
+        graph_edges = self.ctx.graph.edge_list() if self.ctx.graph is not None else None
         result = build_window_result(
             window,
             outcome,
@@ -441,6 +444,7 @@ class LiveMonitor:
             model_version=self.model_version,
             session_id=self.session_id,
             graph_nodes=graph_nodes,
+            graph_edges=graph_edges,
         )
         self.store.append_window(result)
         incidents_snapshot = self._incidents.snapshot()

@@ -15,6 +15,13 @@ interface Props {
    * appended after. Nothing is hard-coded: the order is the declared graph's own.
    */
   order?: string[] | null;
+  /**
+   * Declared dependency edges as [parent, child] pairs from the backend graph. An arrow
+   * between two consecutively-rendered nodes is drawn ONLY when that exact pair is a
+   * declared edge; unrelated/stable neighbours get a gap, never a fabricated arrow.
+   * When null/empty, no edges are known and no connectors are drawn.
+   */
+  edges?: string[][] | null;
 }
 
 const STATUS_TEXT: Record<string, string> = {
@@ -34,8 +41,16 @@ export function DependencyGraph({
   classifications,
   dependenciesAvailable = true,
   order = null,
+  edges = null,
 }: Props) {
   const entries = classifications ? Object.keys(classifications) : [];
+
+  // Declared edge set as a fast "parent\u0000child" lookup. An arrow between two
+  // consecutively-rendered nodes is drawn only when this set contains that pair, so
+  // unrelated/stable neighbours are never falsely connected and edges are never inferred
+  // from display order.
+  const edgeSet = new Set((edges ?? []).map(([p, c]) => `${p}\u0000${c}`));
+  const hasEdge = (parent: string, child: string) => edgeSet.has(`${parent}\u0000${child}`);
 
   // Order the monitored nodes by the declared dependency graph when we have it, so the
   // arrows follow the real parent -> child direction (root cause upstream, symptoms
@@ -91,14 +106,19 @@ export function DependencyGraph({
                     : "AWAITING"}
               </span>
             </div>
-            {i < nodes.length - 1 && dependenciesAvailable && (
-              <div className="depgraph__edge" aria-hidden>
-                <svg width="24" height="40" viewBox="0 0 24 40">
-                  <line x1="12" y1="0" x2="12" y2="30" stroke="currentColor" strokeWidth="2" />
-                  <path d="M12 40 L6 30 L18 30 Z" fill="currentColor" />
-                </svg>
-              </div>
-            )}
+            {i < nodes.length - 1 &&
+              dependenciesAvailable &&
+              (hasEdge(node, nodes[i + 1]) ? (
+                <div className="depgraph__edge" aria-hidden>
+                  <svg width="24" height="40" viewBox="0 0 24 40">
+                    <line x1="12" y1="0" x2="12" y2="30" stroke="currentColor" strokeWidth="2" />
+                    <path d="M12 40 L6 30 L18 30 Z" fill="currentColor" />
+                  </svg>
+                </div>
+              ) : (
+                // No declared edge between these neighbours: render a gap, not an arrow.
+                <div className="depgraph__gap" aria-hidden />
+              ))}
           </div>
         );
       })}

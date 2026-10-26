@@ -115,3 +115,15 @@ class DependencyGraph:
     def feature_nodes(self) -> list[str]:
         """Raw inputs and derived features (drift-checkable), in topological order."""
         return [n for n in self.topological_order() if self.kind(n) != "model_output"]
+
+    def edge_list(self) -> list[list[str]]:
+        """Declared edges as ``[parent, child]`` pairs, in topological (stable) order.
+
+        This is the authoritative edge set for rendering: a consumer draws an arrow only
+        for a pair present here, never inferring edges from node display order. Edges are
+        ordered by the topological position of the parent then the child for determinism.
+        """
+        topo = {n: i for i, n in enumerate(self.topological_order())}
+        edges = [[p, c] for p, c in self._graph.edges()]
+        edges.sort(key=lambda e: (topo.get(e[0], 0), topo.get(e[1], 0)))
+        return edges

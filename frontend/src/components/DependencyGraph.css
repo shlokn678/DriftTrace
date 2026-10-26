@@ -64,6 +64,11 @@
   place-items: center;
 }
 
+/* No declared edge between two neighbouring nodes: a plain gap, never an arrow. */
+.depgraph__gap {
+  height: var(--space-4);
+}
+
 /* Status treatments - restrained, root cause strongest */
 .depnode--stable { border-color: var(--status-stable); background: var(--status-stable-surface); }
 .depnode--stable .depnode__status { color: var(--status-stable); }

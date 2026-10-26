@@ -95,6 +95,32 @@ def test_two_independent_roots_on_branched_graph() -> None:
 
 
 @pytest.mark.unit
+def test_two_independent_chains_yield_two_roots() -> None:
+    """Two DISJOINT chains (feature_a->feature_b and feature_c->feature_d) drifting in the
+    same window must yield TWO independent root-cause candidates (feature_a, feature_c),
+    each with its own downstream symptom. This is the multi-root scenario the demo asks
+    about: separate branches, not a converging graph."""
+    two_chains = graph_from_edges([["feature_a", "feature_b"], ["feature_c", "feature_d"]])
+    report = DriftReport(window_id="w0", baseline_version="1")
+    for n in ("feature_a", "feature_b", "feature_c", "feature_d"):
+        report.nodes[n] = NodeDriftResult(
+            node=n, verdict=str(Verdict.DRIFT), ks={}, psi={"psi": 0.5}
+        )
+    rca = analyze(report, two_chains)
+    roots = {c.node for c in rca.root_cause_candidates}
+    assert roots == {"feature_a", "feature_c"}
+    assert len(rca.root_cause_candidates) == 2
+    # Each root owns exactly its own downstream branch as a symptom path.
+    by_node = {c.node: c for c in rca.root_cause_candidates}
+    assert by_node["feature_a"].symptom_path == ["feature_b"]
+    assert by_node["feature_c"].symptom_path == ["feature_d"]
+    assert set(rca.symptoms) == {"feature_b", "feature_d"}
+    # The result schema preserves BOTH roots (no primary-only truncation).
+    d = rca.to_dict()
+    assert {c["node"] for c in d["root_cause_candidates"]} == {"feature_a", "feature_c"}
+
+
+@pytest.mark.unit
 def test_classify_nodes(graph) -> None:
     cls = classify_nodes(_report(["feature_a", "feature_b", "feature_c"]), graph)
     assert cls["feature_a"] == "ROOT_CAUSE"
