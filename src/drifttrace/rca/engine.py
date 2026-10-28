@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
+from drifttrace.bundle.reference import OUTPUT_NODE
 from drifttrace.drift.engine import DriftReport
 from drifttrace.drift.verdict import Verdict
 from drifttrace.graph.dag import DependencyGraph
@@ -73,8 +74,15 @@ def _severity(node: str, report: DriftReport) -> float:
 
 
 def analyze(report: DriftReport, graph: DependencyGraph) -> RCAResult:
-    """Run RCA over a per-node :class:`DriftReport` using the declared graph."""
-    drifted = set(report.drifted_nodes)
+    """Run RCA over a per-node :class:`DriftReport` using the declared graph.
+
+    RCA classifies drift among FEATURE nodes (root causes and downstream symptoms). The
+    model-output node (``prediction``) is monitored for drift separately and is NOT
+    treated as a feature root cause or symptom here: its drift reflects the inputs
+    changing, and in the no-graph case the output node is only synthetically connected to
+    features. Its drift verdict and KS/PSI remain in the drift report regardless.
+    """
+    drifted = {n for n in report.drifted_nodes if n != OUTPUT_NODE}
     result = RCAResult(
         window_id=report.window_id,
         baseline_version=report.baseline_version,

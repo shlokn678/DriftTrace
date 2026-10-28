@@ -119,17 +119,40 @@ def profile_reference(
     return ReferenceProfile(feature_names=names, features=features, n_rows=len(frame))
 
 
+def output_label(value: float | int | str) -> str:
+    """Canonical string label for a classifier output value.
+
+    Classifier predictions arrive as numeric class ids (e.g. ``0.0``/``1.0`` because the
+    standardized event stores ``output = float(prediction)``). Integer-valued floats are
+    rendered without a trailing ``.0`` so ``0.0`` and ``0`` map to the same class label.
+    """
+    if isinstance(value, str):
+        return value
+    f = float(value)
+    if f.is_integer():
+        return str(int(f))
+    return str(f)
+
+
 def baseline_from_profile(
     profile: ReferenceProfile,
     *,
     model_version: str,
     output_values: list[float] | None = None,
+    output_kind: str = "continuous",
 ) -> Baseline:
     """Build a drift :class:`Baseline` from a reference profile.
 
     Each feature becomes a node baseline. If ``output_values`` (the model's predictions
-    over the reference) is provided, an ``OUTPUT_NODE`` continuous baseline is added so
-    output drift can be monitored too.
+    over the reference) is provided, an ``OUTPUT_NODE`` baseline is added so output drift
+    can be monitored too.
+
+    ``output_kind`` selects how the output node is modelled:
+
+    - ``"continuous"`` (regression): KS + PSI over the numeric output distribution.
+    - ``"categorical"`` (classification): class-frequency PSI only. The numeric KS test is
+      NOT applied to discrete class labels (it is meaningless there), so KS stays
+      unavailable for a categorical output and only the categorical PSI is reported.
     """
     baseline = Baseline(model_version=model_version)
     for name in profile.feature_names:
@@ -149,10 +172,24 @@ def baseline_from_profile(
                 count=fp.count,
             )
     if output_values:
-        baseline.nodes[OUTPUT_NODE] = NodeBaseline(
-            node=OUTPUT_NODE,
-            kind="continuous",
-            values=[float(v) for v in output_values],
-            count=len(output_values),
-        )
+        if output_kind == "categorical":
+            labels = [output_label(v) for v in output_values]
+            total = float(len(labels))
+            categories: dict[str, float] = {}
+            for lab in labels:
+                categories[lab] = categories.get(lab, 0.0) + 1.0
+            categories = {k: v / total for k, v in categories.items()}
+            baseline.nodes[OUTPUT_NODE] = NodeBaseline(
+                node=OUTPUT_NODE,
+                kind="categorical",
+                categories=categories,
+                count=len(labels),
+            )
+        else:
+            baseline.nodes[OUTPUT_NODE] = NodeBaseline(
+                node=OUTPUT_NODE,
+                kind="continuous",
+                values=[float(v) for v in output_values],
+                count=len(output_values),
+            )
     return baseline

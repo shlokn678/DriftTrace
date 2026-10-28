@@ -154,7 +154,10 @@ export default function App() {
 
             <section className="section bento">
               <IncidentCard report={panelReport} source={source} />
-              <ExplanationPanel features={activeModel.data?.features ?? []} />
+              <ExplanationPanel
+                features={activeModel.data?.features ?? []}
+                sampleRow={modelInfo.data?.sample_row ?? null}
+              />
             </section>
 
             <DriftMetrics report={panelReport} source={source} />

@@ -1,29 +1,13 @@
-# DriftTrace DVC pipeline (FR-1, FR-6.4).
-# Stages wrap the same library functions the CLI and Airflow DAG call.
+# DriftTrace DVC pipeline (demonstration).
+# A single stage that validates the DVC-tracked demo data (mlops_demo_data/,
+# itself tracked via `dvc add` -> mlops_demo_data.dvc) and writes a metrics
+# report. This is a supporting utility, separate from the live drift/RCA engine.
 stages:
-  generate:
-    cmd: python -m drifttrace.cli.main build-dataset --n-rows 5000 --seed 42
+  validate_demo_data:
+    cmd: python scripts/validate_mlops_demo_data.py
     deps:
-      - src/drifttrace/data/generator.py
-      - src/drifttrace/data/build.py
-      - config/schema.yaml
-    outs:
-      - data/dataset.csv
+      - mlops_demo_data
+      - scripts/validate_mlops_demo_data.py
     metrics:
-      - data/validation_report.json:
-          cache: false
-
-  train:
-    cmd: python -m drifttrace.cli.main run-pipeline
-    deps:
-      - data/dataset.csv
-      - src/drifttrace/training/train.py
-      - src/drifttrace/training/pipeline.py
-      - src/drifttrace/features/transform.py
-      - config/graph.yaml
-    outs:
-      - artifacts/baseline.json:
-          cache: false
-    metrics:
-      - artifacts/run_manifest.json:
+      - mlops_demo_summary.json:
           cache: false

@@ -187,10 +187,16 @@ class OnboardingRegistry:
         )
 
         # Baseline: reference feature distributions + the model's reference output
-        # distribution (so output drift can be detected).
+        # distribution (so output drift can be detected). A classifier's output is a
+        # discrete class label -> categorical (class-frequency PSI); a regressor's output
+        # is numeric -> continuous (KS + PSI).
         output_values = _reference_outputs(adapter, reference_frame, profile.feature_names)
+        output_kind = "categorical" if adapter.metadata().task == "classification" else "continuous"
         baseline = baseline_from_profile(
-            profile, model_version=model_id, output_values=output_values
+            profile,
+            model_version=model_id,
+            output_values=output_values,
+            output_kind=output_kind,
         )
 
         graph: DependencyGraph | None = None
@@ -234,6 +240,39 @@ def _read_reference(path: Path) -> pd.DataFrame:
     if frame.shape[1] == 0 or len(frame) == 0:
         raise ReferenceError("The reference data is empty.")
     return frame
+
+
+def representative_row(ctx: ActiveContext) -> dict[str, float | str] | None:
+    """A single representative reference row for the active model, keyed by feature name.
+
+    Returns the first reference row that has a valid (non-null) value for every feature,
+    preserving the model's exact feature names and order. Numeric values are returned as
+    floats and string/categorical values as-is - never invented. Returns ``None`` when no
+    reference frame is available or no complete row exists, so the UI can prompt the user
+    to enter values rather than presenting fabricated defaults.
+    """
+    frame = ctx.reference_frame
+    features = ctx.feature_names
+    if frame is None or len(frame) == 0 or not features:
+        return None
+    cols = [f for f in features if f in frame.columns]
+    if len(cols) != len(features):
+        return None  # reference does not cover the full feature schema
+    subset = frame[cols].dropna()
+    if len(subset) == 0:
+        return None
+    first = subset.iloc[0]
+    row: dict[str, float | str] = {}
+    for f in features:
+        val = first[f]
+        if isinstance(val, str):
+            row[f] = val
+        else:
+            try:
+                row[f] = float(val)
+            except (TypeError, ValueError):
+                return None
+    return row
 
 
 def _reference_outputs(

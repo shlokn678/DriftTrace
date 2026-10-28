@@ -66,6 +66,11 @@ class ModelInfoResponse(BaseModel):
     model_name: str
     features: list[str]
     loaded: bool
+    # One representative row from the active model's reference data, keyed by feature
+    # name (same order as ``features``). Lets the UI pre-fill the explanation form with
+    # real, valid values instead of all-zeros. ``None`` when no model is active or no
+    # usable reference row is available (the UI then asks the user to enter values).
+    sample_row: dict[str, FeatureValue] | None = None
 
 
 # ---- Model onboarding / activation schemas -------------------------------------------

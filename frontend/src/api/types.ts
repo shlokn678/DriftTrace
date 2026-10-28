@@ -24,6 +24,8 @@ export interface ModelInfoResponse {
   model_name: string;
   features: string[];
   loaded: boolean;
+  /** One representative reference row (feature name -> value), or null if unavailable. */
+  sample_row?: Record<string, FeatureValue> | null;
 }
 
 export type FeatureValue = number | string;

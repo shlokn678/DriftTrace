@@ -199,11 +199,14 @@ def create_app(settings: ServingSettings | None = None) -> Any:
                 model_version=None, model_name="none", features=[], loaded=False
             )
         meta = ctx.adapter.metadata()
+        from drifttrace.serving.onboarding import representative_row
+
         return ModelInfoResponse(
             model_version=meta.model_version,
             model_name=meta.name or "model",
             features=list(ctx.feature_names),
             loaded=True,
+            sample_row=representative_row(ctx),
         )
 
     # ---- prediction ------------------------------------------------------------------
