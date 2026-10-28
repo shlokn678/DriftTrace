@@ -190,6 +190,53 @@ def test_activate_classifier_and_predict(client) -> None:
 
 
 @pytest.mark.integration
+def test_model_info_exposes_representative_reference_row(client) -> None:
+    """/model-info returns a real reference row (not zeros) in the model's feature order,
+    so the explanation form can pre-fill valid values."""
+    mid = _upload(client, _classifier_with_graph()).json()["model_id"]
+    client.post(f"/models/{mid}/activate")
+    info = client.get("/model-info").json()
+
+    sample = info["sample_row"]
+    assert sample is not None
+    # Exact feature names AND order preserved.
+    assert list(sample.keys()) == ["feature_a", "feature_b", "feature_c"]
+    # Real values, not an all-zeros fabrication.
+    assert any(abs(float(v)) > 1e-9 for v in sample.values())
+    # Every value is one that actually appears in the reference distribution for its
+    # feature (no invented numbers): the row is drawn straight from reference.csv.
+    ctx_feats = set(info["features"])
+    assert set(sample.keys()) == ctx_feats
+
+
+@pytest.mark.integration
+def test_model_info_sample_row_none_without_active_model(client) -> None:
+    """With no active model, sample_row is null so the UI prompts for values."""
+    info = client.get("/model-info").json()
+    assert info["loaded"] is False
+    assert info["sample_row"] is None
+
+
+@pytest.mark.integration
+def test_model_info_sample_row_switches_with_model(client) -> None:
+    """Switching models updates sample_row to the new model's schema (no leakage)."""
+    mid_a = _upload(client, _classifier_with_graph()).json()["model_id"]
+    client.post(f"/models/{mid_a}/activate")
+    a = client.get("/model-info").json()["sample_row"]
+    assert list(a.keys()) == ["feature_a", "feature_b", "feature_c"]
+
+    mid_b = _upload(client, _classifier_no_graph()).json()["model_id"]
+    client.post(f"/models/{mid_b}/activate")
+    b = client.get("/model-info").json()["sample_row"]
+    assert list(b.keys()) == [
+        "transaction_amount",
+        "merchant_score",
+        "device_score",
+        "country_score",
+    ]
+
+
+@pytest.mark.integration
 def test_activate_regression_pipeline_and_predict(client) -> None:
     mid = _upload(client, _regression_pipeline()).json()["model_id"]
     client.post(f"/models/{mid}/activate")

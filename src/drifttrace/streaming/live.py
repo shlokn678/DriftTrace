@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from drifttrace.alerting.alerter import Alerter
+from drifttrace.bundle.reference import OUTPUT_NODE
 from drifttrace.drift.config import DriftConfig, load_drift_config
 from drifttrace.serving.onboarding import ActiveContext
 from drifttrace.streaming.event import PredictionEvent
@@ -219,11 +220,32 @@ def build_window_result(
             "psi": psi.get("psi"),
         }
 
-    drifted = list(drift.drifted_nodes)
+    # Feature-level drift excludes the model-output node, which is reported separately as
+    # output drift. This keeps drifted_features and RCA (which also excludes the output
+    # node) consistent, and gives the dashboard a dedicated output-drift signal.
+    drifted = [n for n in drift.drifted_nodes if n != OUTPUT_NODE]
     status = "DRIFT" if drifted else "STABLE"
-    # Surface a WARNING summary when nothing drifted but at least one node warns.
-    if not drifted and any(r.verdict == "WARNING" for r in drift.nodes.values()):
+    # Surface a WARNING summary when no feature drifted but at least one feature warns.
+    if not drifted and any(
+        node != OUTPUT_NODE and res.verdict == "WARNING" for node, res in drift.nodes.items()
+    ):
         status = "WARNING"
+
+    # Output-drift block (its own signal; the UI 'prediction (output)' card reads this).
+    output_drift: dict | None = None
+    if OUTPUT_NODE in drift.nodes:
+        out_res = drift.nodes[OUTPUT_NODE]
+        out_ks = out_res.ks or {}
+        out_psi = out_res.psi or {}
+        output_drift = {
+            "node": OUTPUT_NODE,
+            "verdict": out_res.verdict,
+            "ks_statistic": out_ks.get("statistic"),
+            "ks_p_value": out_ks.get("p_value"),
+            "psi": out_psi.get("psi"),
+            "samples": (out_psi.get("current_n") if out_psi else None)
+            or (out_ks.get("current_n") if out_ks else None),
+        }
 
     roots = [c.node for c in rca.root_cause_candidates]
     primary_root = roots[0] if roots else None
@@ -246,6 +268,7 @@ def build_window_result(
         "drifted_features": drifted,
         "drifted_count": len(drifted),
         "per_feature": per_feature,
+        "output_drift": output_drift,
         "dependencies_available": dependencies_available,
         "has_root_cause": rca.has_root_cause,
         "root_cause_candidates": roots,
@@ -375,6 +398,7 @@ class LiveMonitor:
                     break
                 self.events_received += 1
                 self.current_window_count = (self.events_received) % self.live_config.window_size
+                event = self._ensure_output(event)
                 closed = self._windower.add(event)
                 if closed is not None:
                     self._evaluate_window(closed)
@@ -411,6 +435,32 @@ class LiveMonitor:
                 self.status = "ERROR"
                 self.error = f"event source unavailable: {type(exc).__name__}: {exc}"
             return
+
+    def _ensure_output(self, event: PredictionEvent) -> PredictionEvent:
+        """Populate the event's prediction/output by scoring the active model if missing.
+
+        Producers and the broker-free ``/live/ingest`` path commonly send FEATURE-ONLY
+        events (no prediction/output). Output-distribution drift needs the model's
+        output, so when it is absent and features are present, score the event through the
+        active adapter. Events that already carry an output are left unchanged; a scoring
+        failure leaves the event as-is (output monitoring simply stays unavailable for it)
+        and never breaks feature monitoring.
+        """
+        if event.output is not None or event.prediction is not None:
+            return event
+        if not event.features:
+            return event
+        try:
+            result = self.ctx.adapter.predict_one(dict(event.features))
+        except Exception:  # noqa: BLE001 - scoring must never crash the monitor
+            return event
+        return event.model_copy(
+            update={
+                "prediction": result.prediction,
+                "probability": result.probability,
+                "output": result.output,
+            }
+        )
 
     def _evaluate_window(self, window: Window) -> None:
         # Drift + RCA + alert via the EXISTING engine (no duplication).
@@ -492,7 +542,6 @@ def _trivial_graph(feature_names: list[str]) -> DependencyGraph:
     no upstream root-cause tracing is possible. Kept here so the live monitor behaves
     identically to the batch path for models without a dependency graph.
     """
-    from drifttrace.bundle.reference import OUTPUT_NODE
     from drifttrace.graph.dag import DependencyGraph, NodeSpec
 
     specs = [NodeSpec(name=f, kind="raw_input") for f in feature_names]

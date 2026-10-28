@@ -13,16 +13,23 @@ DriftTrace is model-agnostic across its supported **scikit-learn estimators and 
 - [Project overview](#project-overview)
 - [Features](#features)
 - [Architecture and data flow](#architecture-and-data-flow)
+- [Technology stack](#technology-stack)
 - [Model bundle format](#model-bundle-format)
+- [Model-agnostic design](#model-agnostic-design)
 - [Installation](#installation)
 - [Run locally without Redpanda](#run-locally-without-redpanda)
 - [Run continuous monitoring with Redpanda](#run-continuous-monitoring-with-redpanda)
+- [Explainability: SHAP and LIME](#explainability-shap-and-lime)
 - [API endpoints](#api-endpoints)
 - [Multiple root-cause candidates](#multiple-root-cause-candidates)
 - [Testing and validation](#testing-and-validation)
 - [Project structure](#project-structure)
-- [Concepts](#concepts)
+- [MLflow experiment tracking](#mlflow-experiment-tracking)
+- [DVC data versioning and validation](#dvc-data-versioning-and-validation)
 - [Limitations and future work](#limitations-and-future-work)
+- [Troubleshooting](#troubleshooting)
+- [Glossary of technical terms](#glossary-of-technical-terms)
+- [Conclusion](#conclusion)
 
 ## Project overview
 
@@ -49,10 +56,10 @@ Upload a `.drift.zip` bundle containing a serialized supported scikit-learn mode
 
 ### Statistical drift detection
 
-- **KS test:** reports the KS statistic and p-value for numerical distributions.
-- **PSI:** measures the shift between current and reference populations.
+- **KS test (continuous features):** reports the KS statistic and p-value for numerical feature distributions.
+- **PSI:** measures the shift between current and reference populations, for both continuous and categorical distributions.
 - **Categorical drift:** compares category frequencies where applicable.
-- **Output monitoring:** monitors prediction/output changes when enough output observations are available.
+- **Prediction/output drift:** monitors the model's output distribution against a reference output baseline. For a **classifier**, the output is a discrete class label, so it is monitored with **categorical class-frequency PSI** — the KS statistic and KS p-value are legitimately shown as unavailable (`-`) for a categorical output while a valid PSI is still reported. For a **regressor**, the numeric output uses KS + PSI like a continuous feature. Output observations are collected from the scored prediction events, so the output drift signal updates during live monitoring.
 
 The current UI shows a KS p-value threshold of `p < 0.05` and a PSI drift threshold of `PSI >= 0.20`. These are configured detection rules, not universal guarantees that a model is or is not accurate.
 
@@ -85,7 +92,7 @@ SHAP and LIME provide local explanations for an individual prediction. They answ
 - **RCA:** Where might the observed drift have started in the declared dependency graph?
 - **SHAP/LIME:** Which input features influenced this particular model prediction?
 
-Explanation requests have cancellation, timeout handling, and a retry/error state. Feature contribution is not the same as causal root cause.
+The explanation form is **pre-filled with one representative row** drawn from the active model's reference data (real, valid values in the model's own feature order), so the panel does not present an all-zeros example. The inputs stay editable, and if no reference row is available the form stays blank and prompts the user to enter values. Explanation requests have cancellation, timeout handling, and a retry/error state. Feature contribution describes the direction and relative magnitude of a feature's influence on the explained prediction; it is **not** the same as a causal root cause and is not a percentage. See [Explainability: SHAP and LIME](#explainability-shap-and-lime).
 
 ### Human-in-the-loop operations
 
@@ -129,6 +136,34 @@ Model bundle
 ```
 
 **Role of Docker and Redpanda:** Docker runs Redpanda as a container. Redpanda acts as the event broker that receives and distributes producer messages. DriftTrace's backend consumes those messages and analyzes them. Docker does not perform drift detection, and Redpanda does not perform RCA.
+
+## Technology stack
+
+Versions below are the lower bounds declared in `pyproject.toml` (backend) and `frontend/package.json` (frontend), verified against the repository. Actual installed versions may be newer.
+
+| Technology | Version (min / pinned) | Role in DriftTrace |
+| --- | --- | --- |
+| Python | >= 3.11 | Backend language (3.13 used in the project environment). |
+| FastAPI | >= 0.110 | HTTP API for model onboarding, prediction, drift tests, live monitoring, and explanations. |
+| Uvicorn | >= 0.29 | ASGI server that runs the FastAPI app. |
+| scikit-learn | >= 1.3 | The one implemented model family (estimators and Pipelines). |
+| NumPy / pandas | >= 1.26 / >= 2.1 | Numerical arrays and reference/window data handling. |
+| SciPy | >= 1.11 | KS two-sample test used by the drift engine. |
+| NetworkX | >= 3.2 | Represents and traverses the declared dependency graph for RCA. |
+| Pydantic | >= 2.5 | Request/response validation and the standardized event/model schemas. |
+| SHAP | >= 0.44 | Local feature-attribution explanations for a single prediction. |
+| LIME | >= 0.2.0.1 | Alternative local explanation method. |
+| confluent-kafka | >= 2.3 | Kafka-compatible client used to produce/consume events via Redpanda. |
+| React | ^18.3 | Dashboard UI library. |
+| TypeScript | ^5.6 | Typed JavaScript for the frontend. |
+| Vite | ^5.4 | Frontend dev server and production build tool. |
+| lucide-react | ^0.454 | Icon set used in the dashboard. |
+| Redpanda | image `v24.2.7` | Kafka-API-compatible event broker for the live streaming demo (run via Docker). |
+| MLflow | >= 2.11 (3.x installed) | Supporting experiment tracking for the five test models' pre-recorded metrics. |
+| DVC | installed separately (3.x) | Data versioning + a one-stage validation pipeline for the demo data. Not declared in `pyproject.toml`; install it into the environment to use the DVC section. |
+| pytest / Ruff / Black / mypy | >= 8.0 / >= 0.4 / >= 24.3 / >= 1.9 | Testing, linting, formatting, and static type checking (the `dev` extra). |
+
+Install extras are defined in `pyproject.toml`: `serving` (FastAPI/Uvicorn/Kafka client), `explain` (SHAP/LIME), `streaming`, `tracking` (MLflow), and `dev` (test/quality tools).
 
 ## Model bundle format
 
@@ -467,7 +502,7 @@ All checks below are non-destructive — they inspect state and never delete a c
   docker exec drifttrace-redpanda-1 rpk cluster info
   ```
 
-  The reported broker address should be `127.0.0.1:9092`. If it is `redpanda:9092` (or another internal hostname), re-provision the container using the new-machine command in [Terminal 1](#terminal-1--start-docker-desktop-and-redpanda) (advertising `127.0.0.1:9092`) rather than editing the running container. Do not delete the data volume as part of this.
+  The reported broker address should be `127.0.0.1:9092`. If it is `redpanda:9092` (or another internal hostname), re-provision the container using the new-machine command in [Run continuous monitoring with Redpanda](#run-continuous-monitoring-with-redpanda) (advertising `127.0.0.1:9092`) rather than editing the running container. Do not delete the data volume as part of this.
 
 - **Topic:** confirm the demo topic exists and has received records (it is created on first produce).
 
@@ -497,6 +532,24 @@ All checks below are non-destructive — they inspect state and never delete a c
 
 - **Broker recreated after the backend started:** if you stop/recreate the Redpanda container while the backend is running, restart the backend (`Ctrl+C`, then re-run the [Terminal 2](#terminal-2--start-the-backend-in-redpanda-mode) block) so it reconnects to the new broker.
 
+## Explainability: SHAP and LIME
+
+The dashboard's **Model Explanation** panel explains a single prediction for the active model, separately from live drift monitoring.
+
+How it works:
+
+1. The panel reads the active model's feature schema and a **representative reference row** from `GET /model-info` (`sample_row`), and pre-fills one input per feature with those real values in the model's feature order. If no reference row is available, the inputs stay blank and the panel asks you to enter values rather than defaulting to zeros.
+2. You can edit any input. Clicking **Explain prediction** sends the current input values to `POST /explain`, which scores the active model and computes a SHAP (default) or LIME explanation for that prediction.
+3. The panel shows the predicted class or value, a short natural-language summary, the supporting and opposing feature factors, and (behind a toggle) the raw attribution values.
+
+Interpreting the values honestly:
+
+- A **positive** attribution means the feature pushed the prediction **toward** the explained class/output; a **negative** attribution means it pushed **away**. The magnitude indicates relative strength, **not a percentage**.
+- Feature attribution explains *this model's* behaviour on *this input*. It is **not** proof of a real-world causal relationship, and it is distinct from dependency-graph RCA.
+- Explanations are computed on demand for one prediction. They are **not** produced automatically for every live monitoring window; live drift monitoring and prediction explanations are separate features.
+
+Explanation requests run off the prediction hot path and include request cancellation, a timeout, and a visible retry/error state so a slow or failed request does not leave the panel stuck.
+
 ## API endpoints
 
 The exact schemas are defined by the backend. The main live-monitoring endpoints are:
@@ -511,7 +564,7 @@ The exact schemas are defined by the backend. The main live-monitoring endpoints
 | `GET /live/incidents` | Retrieve incident state and incident history. |
 | `POST /live/ingest` | Submit an event through the broker-free ingestion path. |
 
-Other existing endpoints include `/predict`, `/demo/run-drift-test`, `/rca/latest`, `/models/*`, `/explain`, `/health`, and `/metrics`. Consult the route definitions and API response models for the current request/response schema.
+Other existing endpoints include `/health`, `/ready`, `/model-info` (feature schema plus a representative `sample_row`), `/predict`, `/explain`, `/demo/run-drift-test`, `/rca/latest`, `/metrics`, and the model-management routes `/models/upload`, `/models/active`, `/models/{model_id}`, `/models/{model_id}/activate`, and `/models/deactivate`. Consult the route definitions and API response models for the current request/response schema.
 
 ## Multiple root-cause candidates
 
@@ -560,57 +613,123 @@ npx tsc --noEmit
 npm run build
 ```
 
-### Latest verified quality-gate results
+### Model-bundle and DVC validation
 
-The last recorded full validation for the implementation reported:
+```powershell
+# Regenerate (optional) and validate the five demonstration bundles end to end.
+python scripts/generate_test_models.py
+python scripts/validate_test_models.py
 
-- **134 pytest tests passed**, 0 failures (includes genericity tests that build previously-unseen models at test time).
-- Ruff: clean (`src tests`).
-- Black: clean.
-- MyPy: clean across 54 source files.
-- Frontend TypeScript check: passed.
-- Frontend production build: passed.
-- Edge-faithful dependency-graph regression test: passed.
-- Multi-root RCA tests with genuine drift data and live result-schema verification: passed.
-- Model-agnostic end-to-end tests (`tests/integration/test_model_agnostic.py`): previously-unseen multiclass `Pipeline`, a regressor without `predict_proba` (SVR), a novel graph chain with edge-accurate RCA, model-switch isolation, and dynamic-schema SHAP — all pass with **no production-code changes per model**.
-- Smoke test and five-bundle validation: passed.
+# Validate the DVC-tracked demo data (same check wired as the DVC stage).
+python -m dvc repro
+python -m dvc metrics show
+```
 
-These are recorded validation results for the tested code state. After making further code changes, rerun the commands above to validate the new state.
+### Latest recorded quality-gate results
+
+The following are the **last recorded** verification results for the tested code state. They were observed in a previous verification run and are reported here as recorded results — rerun the commands above to re-confirm them on your machine.
+
+- **145 backend pytest tests passed**, 0 failures (the suite currently collects 145 tests; it includes genericity tests that build previously-unseen models at test time, categorical prediction-output PSI tests, and the SHAP reference-row tests).
+- Ruff: passed (`src tests`).
+- Black: passed.
+- mypy: passed.
+- Frontend TypeScript check (`npx tsc --noEmit`): passed.
+- Frontend production build (`npm run build`): passed.
+- Five-bundle validation (`scripts/validate_test_models.py`): all five models passed.
+- DVC validation stage: `mlops_demo_summary.json` reports `all_valid: true` for all five datasets.
 
 ## Project structure
 
 ```text
 DriftTrace/
 ├── src/drifttrace/             # backend and core monitoring logic
-│   ├── graph/                  # dependency graph implementation
-│   ├── governance/             # report construction and RCA/report integration
-│   ├── serving/                # FastAPI endpoints and serving configuration
-│   └── streaming/              # event schema, live monitor, persistence
+│   ├── adapters/               # model adapter interface + scikit-learn adapter + registry
+│   ├── bundle/                 # bundle loading, reference profiling, baseline building
+│   ├── drift/                  # KS/PSI drift engine and verdicts
+│   ├── rca/                    # dependency-graph root-cause analysis
+│   ├── graph/                  # dependency graph representation and traversal
+│   ├── explain/                # SHAP / LIME local explanations
+│   ├── streaming/              # event schema, live monitor, windows, persistence
+│   ├── serving/                # FastAPI endpoints, onboarding, serving configuration
+│   ├── alerting/               # incident alert payloads and delivery helpers
+│   ├── governance/             # monitoring report construction / RCA-report integration
+│   └── cli/                    # command-line entry point (serve, etc.)
 ├── frontend/                   # React + TypeScript + Vite dashboard
-├── tests/                      # backend unit and integration tests
-├── scripts/                    # demo producer, validation, and test-model tools
-├── artifacts/                  # generated local model bundles (runtime artifacts)
+│   └── src/                    # api client/types, sections, components, hooks
+├── tests/                      # backend unit and integration tests (pytest)
+├── scripts/                    # demo producer, model-bundle tools, MLflow/DVC utilities
+│   ├── live_demo_producer.py   # Redpanda/broker-free event producer for the live demo
+│   ├── generate_test_models.py # builds the five demonstration bundles
+│   ├── validate_test_models.py # end-to-end validation of the five bundles
+│   ├── log_test_models_mlflow.py     # MLflow: logs pre-recorded metrics as runs
+│   └── validate_mlops_demo_data.py   # DVC stage: validates the demo data
+├── config/                     # runtime configuration (drift/window defaults)
+├── artifacts/test_models/      # generated local model bundles (runtime artifacts)
 ├── reports/                    # generated reports and live-monitoring history
-├── config/                     # runtime configuration
-├── pyproject.toml              # package metadata and dependencies
+├── mlops_demo_data/            # DVC-tracked copy of the demo datasets
+├── mlops_demo_data.dvc         # DVC pointer file for mlops_demo_data/
+├── dvc.yaml / dvc.lock         # DVC pipeline (validate_demo_data stage) + lock file
+├── mlops_demo_summary.json     # DVC metrics output from the validation stage
+├── mlflow.db                   # local MLflow SQLite tracking store (generated)
+├── pyproject.toml              # package metadata, dependencies, and tool config
 └── README.md
 ```
 
-## Concepts
+The tree omits incidental, machine-specific items that are not core source — for example the Python virtual environment (`.venv/`), `node_modules/`, build output, caches, and the generated MLflow/DVC cache directories.
 
-| Term | Meaning in DriftTrace |
-|---|---|
-| **Reference data / baseline** | Data representing the distribution the active model is expected to receive. |
-| **Data drift** | A change in the distribution of incoming data relative to the reference. Drift alone does not prove model accuracy has fallen. |
-| **KS statistic** | A measure of the maximum separation between two empirical cumulative distributions. |
-| **KS p-value** | Statistical evidence used with the KS test; it is not an effect-size measure by itself. |
-| **PSI** | A measure of population shift between reference and current data. |
-| **Monitoring window** | A group of events evaluated together. Live monitoring uses configurable tumbling windows. |
-| **Dependency graph** | A directed graph of declared relationships used for tracing affected nodes. |
-| **Root-cause candidate** | An upstream affected node supported by the available drift results and dependency graph; not proof of causality. |
-| **Symptom** | A downstream affected node on a dependency path. |
-| **SHAP/LIME** | Methods for explaining feature influence on an individual prediction, distinct from drift RCA. |
-| **Human-in-the-loop** | Operators remain responsible for approving significant operational actions. |
+## MLflow experiment tracking
+
+MLflow is used here as **supporting experiment tracking** for the five demonstration models. It is deliberately limited and is **not** part of the live drift-detection / RCA engine. It does **not** perform automatic retraining, automatic model selection, or any automated production training pipeline.
+
+What the logger does: `scripts/log_test_models_mlflow.py` reads each model's existing `metrics.json` (written when the bundles were generated) and records one MLflow run per model — parameters (model name, algorithm, task, dataset, feature count, graph availability) and the pre-recorded scalar metrics — under the experiment **`DriftTrace-Test-Models`**. The tracking store is a local SQLite file, `mlflow.db`, at the repository root. Each run is tagged (`metrics_source = precomputed_from_metrics_json`) to make clear that **nothing is retrained and no metric is re-evaluated**. The source `metrics.json` is attached to each run as an artifact.
+
+Run it from the repository root with the virtual environment active (requires the `tracking` extra: `pip install -e ".[tracking]"`):
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+
+# Log the five runs into mlflow.db (one run per model).
+python scripts/log_test_models_mlflow.py
+```
+
+> **Note:** running the logger again creates **additional** runs — it appends, it does not overwrite. Re-run it only when you want new copies of the runs.
+
+Open the MLflow UI against the same local store (this is a long-running server; stop it with `Ctrl+C`):
+
+```powershell
+mlflow ui --backend-store-uri sqlite:///mlflow.db --host 127.0.0.1 --port 5001
+```
+
+Then browse to `http://127.0.0.1:5001`, open the `DriftTrace-Test-Models` experiment, and compare the five runs. The port is whatever you pass to `--port`; `5001` is used here to avoid clashing with other local services. The logged metrics are the held-out evaluation numbers recorded for each model (for example, the `synthetic_regression` run shows `r2 ≈ 0.956`); they come straight from the bundles' `metrics.json`, not from any run performed by DriftTrace monitoring.
+
+## DVC data versioning and validation
+
+DVC is used here for **data versioning and a small validation pipeline** over the demonstration data. Like MLflow, it is a supporting utility separate from the live monitoring engine.
+
+What is tracked and validated:
+
+- `mlops_demo_data/` holds a copy of each model's `reference.csv`, `stable.csv`, `drift.csv`, and `metrics.json`. The directory is tracked by DVC via `mlops_demo_data.dvc` (created with `dvc add`), so the data content is versioned by hash rather than committed directly to Git.
+- `dvc.yaml` defines a single pipeline stage, **`validate_demo_data`**, which runs `scripts/validate_mlops_demo_data.py`. The script checks, for each of the five models, that `reference.csv`, `stable.csv`, `drift.csv`, and `metrics.json` all exist and that the three CSVs share the same feature columns, then records row counts, feature count, task, algorithm, and the scalar metrics.
+- The stage writes `mlops_demo_summary.json` (the DVC metrics output). `dvc.lock` records the resolved stage inputs/outputs.
+
+**Storage (be explicit):** a DVC remote named `localremote` is configured to a **local filesystem path** (`../.dvc-storage`) in `.dvc/config`. This demonstrates local reproducibility and `dvc push`/`dvc pull` against on-disk storage, but it is **not** a shared or cloud remote — the data is not automatically backed up to or shared with another computer unless you configure and populate a shared remote. DVC must be installed in the environment (it is not declared in `pyproject.toml`): `pip install dvc`.
+
+Run the pipeline from the repository root with the virtual environment active:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+
+# Reproduce the validation stage (writes mlops_demo_summary.json).
+python -m dvc repro
+
+# Check whether the tracked data / stage outputs are up to date.
+python -m dvc status
+
+# Show the metrics the stage produced.
+python -m dvc metrics show
+```
+
+Expected result when the current artifacts are valid: all five demonstration datasets validate successfully — `mlops_demo_summary.json` reports `"all_valid": true` with `"n_models": 5` and every model's `"status": "pass"` (four classification datasets and one regression dataset). If `dvc status` reports the stage is already up to date, `dvc repro` will not re-run it; use `dvc repro --force` only if you intend to re-execute the validation.
 
 ## Limitations and future work
 
@@ -620,11 +739,90 @@ DriftTrace/
 4. **Statistical thresholds:** PSI/KS thresholds need to be chosen for the problem, sample size, and acceptable false-positive rate. Small windows can yield noisy PSI values.
 5. **Production deployment:** The project is local-first. Cloud deployment, authentication/authorization hardening, production-grade broker operations, external alert integrations, and load testing are future work.
 6. **External monitoring stack:** Prometheus/Grafana integration is not part of the current core dashboard implementation.
-7. **MLOps tooling not integrated:** MLflow, Apache Airflow, and DVC are **not** part of the running system. A `dvc.yaml`/`.dvc` scaffold and optional dependency declarations (e.g. `mlflow`, `apache-airflow` extras) exist in the repository, but there is no working integration wired into the application — the presence of these files or declared extras does not constitute functioning MLflow/Airflow/DVC support. Automatic graph learning and graph-neural-network (GNN) based RCA are also not implemented; RCA is graph-traversal over a declared dependency graph, not a learned model. Treat all of these as future work.
+7. **MLOps tooling is a limited, supporting demonstration only:** MLflow and DVC are wired in as small, standalone utilities, not as part of the live drift-detection / RCA engine. MLflow is used for experiment tracking of the five test models' **pre-recorded** metrics (read from each bundle's `metrics.json`; nothing is retrained or re-evaluated). DVC versions a copy of the demo data (`mlops_demo_data/`) and runs a single validation stage that produces a metrics report. The DVC remote is **local-only** (no cloud storage). See the "MLflow and DVC demonstration" section for how to run them. Apache Airflow remains **not** integrated. Automatic graph learning and graph-neural-network (GNN) based RCA are also not implemented; RCA is graph-traversal over a declared dependency graph, not a learned model. Treat these as future work.
 8. **Containerization:** Docker is used only to run the Redpanda broker locally. The DriftTrace backend and frontend are not containerized, and there is no root-level Docker Compose file.
 
 Possible extensions include sliding windows, external alert destinations, broader model adapters, cloud deployment (including managed services such as SageMaker), automatic graph learning, temporal dependency reasoning, and graph-neural-network approaches.
 
-## Project goal in one line
+## Troubleshooting
 
-> DriftTrace turns “the model is drifting” into a more actionable question: **“Which related part changed, what evidence supports that diagnosis, and what should the human operator investigate next?”**
+Non-destructive checks for the most common problems. None of these steps delete data, model artifacts, DVC storage, or Docker volumes. (For live-streaming-specific issues, see also [Troubleshooting the live demo](#troubleshooting-the-live-demo).)
+
+| Symptom | Likely cause | Safe check / action |
+| --- | --- | --- |
+| `/predict`, `/explain`, or live start returns an error about no active model | No model has been uploaded and activated in this session | Upload a `.drift.zip` bundle and activate it; confirm with `GET /models/active`. |
+| Dashboard shows a model but drift/RCA panels stay empty | No monitoring window has completed yet | Run a drift test, or send enough live events to fill at least one window (`DRIFTTRACE_LIVE_WINDOW_SIZE`); check `GET /live/windows`. |
+| `prediction (output)` card shows KS statistic / KS p-value as `-` with a PSI value present | The active model is a classifier, so its output is categorical | This is expected: categorical output uses class-frequency PSI, not the KS test. A present PSI with blank KS is correct, not an error. |
+| A drift test or live window reports insufficient data | Window has fewer samples than `DRIFTTRACE_LIVE_MIN_WINDOW_SAMPLES` | Send more events or lower the minimum-sample setting for the demo. |
+| Producer prints progress but the dashboard counters do not move | Events are not reaching the broker/backend (e.g. wrong broker address or topic) | Confirm the broker advertises `127.0.0.1:9092`, the topic matches `DRIFTTRACE_TOPIC`, and `GET /live/status` shows `source: redpanda`; see the live-demo troubleshooting section. |
+| Backend cannot connect to Redpanda | Broker not started, or backend started before the broker | Start/verify the container (`docker start drifttrace-redpanda-1`, `rpk cluster info`), then restart the backend so it reconnects. |
+| Uploading a bundle fails validation | Missing `model.pkl` / `reference.csv`, or an unsupported model type | Check the bundle contains the required files and a supported scikit-learn model; read the error message returned by `/models/upload`. |
+| Producer rejects a `--bundle` with a schema-mismatch error | The bundle's feature schema differs from the active model's | Activate the matching model first, or pass a bundle whose `reference.csv` columns match the active model. |
+| Live panel seems to show a previous model's results | A stale session before switching models | Monitoring state is scoped by model/session; re-check `GET /live/status`, and start a new monitoring session for the current model. |
+| `mlflow ui` port is already in use | Another process holds the port | Choose a different `--port` (for example `5002`); the UI port is not fixed by the app. |
+| `dvc repro` says "up to date" and does nothing | Inputs and outputs are unchanged | This is normal. Use `python -m dvc repro --force` only if you intend to re-run the validation stage. |
+
+## Glossary of technical terms
+
+Plain-English definitions (one to two sentences each) for the terms used in this README and the project.
+
+| Term | Simple explanation |
+| --- | --- |
+| MLOps | The practice of running machine-learning models reliably in production, including deployment, monitoring, and maintenance. |
+| Machine learning model | A program that learns patterns from data and then makes predictions on new data. |
+| Model bundle | A ZIP file containing a trained model, its reference data, and an optional dependency graph that DriftTrace loads and monitors. |
+| Reference data / baseline | A saved sample of the data the model is expected to see, used as the "normal" to compare new data against. |
+| Feature | One input column the model uses to make a prediction (for example, "age" or "price"). |
+| Prediction / model output | The value the model produces for an input: a class label for classification or a number for regression. |
+| Data drift | A change over time in the distribution of the input data compared with the reference data. |
+| Concept drift | A change in the real relationship between inputs and the correct answer, which data drift alone does not directly measure. |
+| Continuous feature | A numeric feature that can take a range of values (for example, temperature). |
+| Categorical feature | A feature whose values are distinct labels or categories (for example, "red" / "blue"). |
+| Monitoring window | A fixed-size group of recent events that DriftTrace evaluates together as one unit. |
+| KS test | The Kolmogorov–Smirnov test, a statistical test that compares two numeric distributions to see how different they are. |
+| KS statistic | A number from the KS test giving the largest gap between the two distributions; larger means more different. |
+| P-value | The probability of seeing a difference this large by chance if nothing really changed; a small value suggests a real difference. |
+| Population Stability Index (PSI) | A score that measures how much a distribution has shifted from the reference; higher means a bigger shift. |
+| Drift threshold | A configured cut-off (for example PSI ≥ 0.20) above which a change is treated as drift. |
+| Drift detection | The process of deciding whether current data differs enough from the reference to be flagged as drifted. |
+| Root-cause analysis (RCA) | Using the dependency graph and drift results to suggest which upstream feature most likely started an observed drift. |
+| Dependency graph | A map of declared directed relationships between features, showing which feature is considered upstream of another. |
+| Root node | In RCA, an upstream feature flagged as a likely starting point of the drift (a candidate, not proven cause). |
+| Symptom / downstream feature | A feature further down the dependency graph whose drift is likely a knock-on effect of an upstream change. |
+| Incident | A tracked event opened when drift persists across consecutive windows, so repeated drift is grouped instead of re-alerted each window. |
+| Recovery | The return to stable windows after drift, which eventually closes an open incident. |
+| SHAP | A method that estimates how much each feature contributed to one specific prediction. |
+| LIME | Another method that explains one prediction by approximating the model locally around that input. |
+| Feature attribution | A value showing the direction and relative strength of a feature's influence on a prediction; it is not a percentage or a proven cause. |
+| Causal relationship | A real cause-and-effect link; DriftTrace does not prove this, it only provides diagnostic evidence. |
+| Model adapter | The small interface that lets the monitoring core talk to a model without depending on its specific framework. |
+| Classification | A prediction task whose output is a category or class label. |
+| Regression | A prediction task whose output is a continuous number. |
+| API | An application programming interface: the set of HTTP endpoints other programs use to talk to the backend. |
+| FastAPI | The Python web framework used to build DriftTrace's HTTP API. |
+| React | The JavaScript library used to build the dashboard user interface. |
+| TypeScript | A typed version of JavaScript used for the frontend code. |
+| Vite | The tool that runs the frontend in development and builds it for production. |
+| Streaming | Continuously sending and processing data events one after another, rather than in a single batch. |
+| Event producer | A program (here `scripts/live_demo_producer.py`) that sends prediction events into the broker for monitoring. |
+| Redpanda | A Kafka-compatible event broker, run locally in Docker, that carries the streamed prediction events. |
+| Kafka-compatible broker | A message system that speaks the Kafka protocol, so Kafka clients can connect to it (Redpanda is one). |
+| MLflow | A tool for tracking machine-learning experiments; here it records the five test models' pre-computed metrics. |
+| Experiment tracking | Recording models, parameters, and metrics so runs can be compared later. |
+| Metric | A measured number describing model quality, such as accuracy or R². |
+| DVC | Data Version Control, a tool for versioning datasets and defining reproducible data pipelines. |
+| Data versioning | Tracking changes to datasets by content so a specific version can be restored or reproduced. |
+| Reproducibility | Being able to re-run a process and get the same result from the same inputs. |
+| DVC pipeline / stage | A defined step (here `validate_demo_data`) with declared inputs and outputs that DVC can re-run on demand. |
+| pytest | The framework used to run the backend's automated tests. |
+| Ruff | A fast Python linter that flags code-style and quality issues. |
+| Black | A Python code formatter that enforces a consistent style. |
+| mypy | A static type checker that verifies Python type annotations without running the code. |
+| Tumbling window | A monitoring window that does not overlap with the next one; each event belongs to exactly one window. |
+| Live source | Where live events come from: the broker-free local path, or a Redpanda topic. |
+
+## Conclusion
+
+DriftTrace is a local-first MLOps monitoring and investigation tool for scikit-learn models. You upload a model bundle (model, reference data, optional dependency graph), then monitor it either on demand or as a continuous Redpanda event stream. The same KS/PSI drift engine and dependency-graph RCA engine run in both paths: DriftTrace detects feature and prediction-output drift, groups persistent drift into incidents that open and recover, traces likely root-cause candidates when a graph is provided, and explains individual predictions with SHAP or LIME. MLflow and DVC are included as supporting experiment-tracking and data-validation utilities, not as an automated training or production pipeline.
+
+It is intended for learning, demonstration, and local experimentation. It is not a hardened production deployment: there is no authentication layer, no automatic retraining or rollback, and storage/broker operations are local. Used within those limits, DriftTrace turns “the model is drifting” into a more actionable question — **which related part changed, what evidence supports that diagnosis, and what should the human operator investigate next?**

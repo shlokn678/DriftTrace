@@ -571,6 +571,36 @@ def test_live_latest_exposes_per_feature_ks_psi_for_panels(iso_client) -> None:
 
 
 @pytest.mark.integration
+def test_live_prediction_output_drift_is_monitored_for_classifier(iso_client) -> None:
+    """Regression: the 'prediction (output)' node must carry real categorical PSI.
+
+    Previously the output node was (a) always continuous (numeric KS on class labels) and
+    (b) never collected from the event (the window read only ev.features), so the card
+    showed INSUFFICIENT DATA with KS/PSI '-' in every phase. The output value lives in
+    ev.prediction/ev.output; for a classifier it is now compared by class-frequency PSI.
+    """
+    cols = ["age_x", "usage_x", "calls_x"]
+    _activate(iso_client, _named_bundle(cols))  # LogisticRegression classifier
+    _run_live_window(iso_client, cols)
+
+    windows = iso_client.get("/live/windows").json()["windows"]
+    full = [w for w in windows if w["event_count"] >= 30]
+    assert full, "expected at least one full window"
+    window = full[-1]
+
+    # The output node is present and actually evaluated (not INSUFFICIENT_DATA).
+    assert "prediction" in window["per_feature"], "output node must be monitored"
+    out = window["per_feature"]["prediction"]
+    assert out["verdict"] in ("STABLE", "WARNING", "DRIFT")
+    assert out["verdict"] != "INSUFFICIENT_DATA"
+    # Categorical output: class-frequency PSI is computed; the numeric KS test is NOT
+    # applied to discrete class labels.
+    assert out["psi"] is not None
+    assert out["ks_statistic"] is None
+    assert out["ks_p_value"] is None
+
+
+@pytest.mark.integration
 def test_live_status_active_model_matches_while_running(iso_client) -> None:
     """/live/status reports active_model true with a matching model_id + a latest window."""
     cols = ["age_x", "usage_x", "calls_x"]

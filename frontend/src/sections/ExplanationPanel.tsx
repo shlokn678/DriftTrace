@@ -28,38 +28,77 @@ function factorText(f: ExplanationFactor): string {
 interface Props {
   /** The active model's feature names (dynamic). Empty when no model is active. */
   features: string[];
+  /** A representative reference row (feature name -> value) to pre-fill the form, or
+   * null when none is available for the active model. */
+  sampleRow?: Record<string, number | string> | null;
 }
 
 /** SHAP (primary) / LIME (secondary) explanation via /explain, off the hot path.
- * Inputs are generated dynamically from the active model's feature names. */
-export function ExplanationPanel({ features }: Props) {
-  const [values, setValues] = useState<Record<string, number>>({});
+ * Inputs are generated dynamically from the active model's feature names and pre-filled
+ * with one real reference row (never invented values). */
+export function ExplanationPanel({ features, sampleRow = null }: Props) {
+  const [values, setValues] = useState<Record<string, number | string>>({});
   const [method, setMethod] = useState<"shap" | "lime">("shap");
   const [exp, setExp] = useState<Explanation | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showTech, setShowTech] = useState(false);
+  // True only when the form was seeded from a real reference row (not all-zeros).
+  const [seededFromReference, setSeededFromReference] = useState(false);
   // Guards against superseded responses; the controller lets us abort in-flight work.
   const reqIdRef = useRef(0);
   const ctrlRef = useRef<AbortController | null>(null);
 
-  // Seed one numeric input per feature (default 0) when the active model changes.
+  // Seed one input per feature when the active model (or its sample row) changes:
+  // use the representative reference row when available (real, valid values in the
+  // model's own feature order), otherwise leave inputs empty and tell the user to enter
+  // values rather than presenting all-zeros as a meaningful example.
   // Also abort any in-flight explain and reset state so a stale/superseded response
   // cannot leave the CURRENT model's panel stuck.
   useEffect(() => {
     ctrlRef.current?.abort();
     reqIdRef.current += 1;
-    setValues((prev) => {
-      const next: Record<string, number> = {};
-      for (const f of features) next[f] = prev[f] ?? 0;
-      return next;
-    });
+    const hasSample =
+      sampleRow != null && features.length > 0 && features.every((f) => f in sampleRow);
+    const next: Record<string, number | string> = {};
+    for (const f of features) next[f] = hasSample ? sampleRow![f] : "";
+    setValues(next);
+    setSeededFromReference(hasSample);
     setExp(null);
     setLoading(false);
     setError(null);
-  }, [features]);
+  }, [features, sampleRow]);
+
+  // A feature is "filled" when it has a non-empty value the user/reference provided.
+  const emptyFeatures = features.filter((f) => {
+    const v = values[f];
+    return v === "" || v === undefined || v === null;
+  });
+  const allFilled = features.length > 0 && emptyFeatures.length === 0;
+
+  /** Coerce the editable form values into the payload /explain expects. A numeric-looking
+   * string becomes a number; anything else is sent as the string the model expects. */
+  function payload(): Record<string, number | string> {
+    const out: Record<string, number | string> = {};
+    for (const f of features) {
+      const v = values[f];
+      if (typeof v === "number") {
+        out[f] = v;
+      } else {
+        const n = Number(v);
+        out[f] = v !== "" && !Number.isNaN(n) ? n : (v ?? "");
+      }
+    }
+    return out;
+  }
 
   async function run() {
+    if (!allFilled) {
+      setError(
+        `Enter a value for every feature before explaining (${emptyFeatures.length} empty).`,
+      );
+      return;
+    }
     const myId = ++reqIdRef.current;
     const ctrl = new AbortController();
     ctrlRef.current = ctrl;
@@ -67,7 +106,8 @@ export function ExplanationPanel({ features }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const result = await api.explain(values, method, ctrl.signal);
+      // Always send the CURRENT input values (never a stale/cached payload).
+      const result = await api.explain(payload(), method, ctrl.signal);
       if (reqIdRef.current === myId) setExp(result);
     } catch (err) {
       if (reqIdRef.current === myId)
@@ -99,21 +139,38 @@ export function ExplanationPanel({ features }: Props) {
         />
       ) : (
         <>
+          {seededFromReference ? (
+            <p className="tertiary" style={{ marginBottom: "var(--space-3)", fontSize: "0.82rem" }}>
+              Pre-filled with one representative row from the model's reference data. Edit any
+              value, then Explain prediction.
+            </p>
+          ) : (
+            <p className="muted" style={{ marginBottom: "var(--space-3)", fontSize: "0.82rem" }}>
+              No representative reference row is available for this model. Enter a value for each
+              feature below before explaining — the fields are intentionally blank rather than
+              defaulting to zeros, which would not be a meaningful example.
+            </p>
+          )}
           <div className="row row-3 wrap" style={{ marginBottom: "var(--space-4)" }}>
-            {features.map((f) => (
-              <label key={f} className="stack stack-2">
-                <MonoLabel>{f}</MonoLabel>
-                <input
-                  type="number"
-                  value={values[f] ?? 0}
-                  onChange={(e) =>
-                    setValues((v) => ({ ...v, [f]: Number(e.target.value) }))
-                  }
-                  className="expl-input mono-value"
-                  aria-label={`${f} value for explanation`}
-                />
-              </label>
-            ))}
+            {features.map((f) => {
+              const v = values[f];
+              const isString = typeof v === "string" && v !== "" && Number.isNaN(Number(v));
+              return (
+                <label key={f} className="stack stack-2">
+                  <MonoLabel>{f}</MonoLabel>
+                  <input
+                    type={isString ? "text" : "number"}
+                    value={v ?? ""}
+                    placeholder={seededFromReference ? undefined : "enter value"}
+                    onChange={(e) =>
+                      setValues((prev) => ({ ...prev, [f]: e.target.value }))
+                    }
+                    className="expl-input mono-value"
+                    aria-label={`${f} value for explanation`}
+                  />
+                </label>
+              );
+            })}
           </div>
           <div className="row row-3 wrap" style={{ marginBottom: "var(--space-4)" }}>
             <div className="stack stack-2">

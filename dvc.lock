@@ -56,3 +56,20 @@ stages:
       hash: md5
       md5: a2131b3863af2219eb92e7a54d957498
       size: 662
+  validate_demo_data:
+    cmd: python scripts/validate_mlops_demo_data.py
+    deps:
+    - path: mlops_demo_data
+      hash: md5
+      md5: 0856917fce84a1539b667b5c185a1f24.dir
+      size: 1342735
+      nfiles: 21
+    - path: scripts/validate_mlops_demo_data.py
+      hash: md5
+      md5: b0c88759de84c8d6fdca0a569bfedccb
+      size: 4570
+    outs:
+    - path: mlops_demo_summary.json
+      hash: md5
+      md5: f970f5f35f72b253556fd31979e2572b
+      size: 2952

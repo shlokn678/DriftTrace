@@ -39,3 +39,4 @@ reg_result.txt
 /.venv-airflow
 # Agent workflow git worktrees (not part of the deliverable)
 /.worktrees/
+/mlops_demo_data

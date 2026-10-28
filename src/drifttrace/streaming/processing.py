@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from drifttrace.alerting.alerter import Alerter
+from drifttrace.bundle.reference import OUTPUT_NODE, output_label
 from drifttrace.drift.baseline import Baseline
 from drifttrace.drift.config import DriftConfig
 from drifttrace.drift.engine import DriftReport, detect_drift
@@ -23,9 +24,25 @@ from drifttrace.governance.report import MonitoringReport, build_report
 from drifttrace.graph.dag import DependencyGraph
 from drifttrace.rca.engine import RCAResult, analyze
 from drifttrace.serving.metrics import METRICS
+from drifttrace.streaming.event import PredictionEvent
 from drifttrace.streaming.window import Window
 
 logger = logging.getLogger("drifttrace.streaming.processing")
+
+
+def _event_class_label(ev: PredictionEvent) -> str | None:
+    """The discrete class label for a classifier event, as a canonical string.
+
+    Prefers the explicit ``prediction`` class id; falls back to ``output`` (which the
+    standardized event sets to ``float(prediction)`` for classifiers). Returns None when
+    neither is available, so an event with no class contributes nothing (rather than a
+    fabricated value).
+    """
+    if ev.prediction is not None:
+        return output_label(ev.prediction)
+    if ev.output is not None:
+        return output_label(ev.output)
+    return None
 
 
 @dataclass
@@ -85,15 +102,34 @@ class Phase4Processor:
         # the continuous KS/PSI path; string values feed the categorical PSI path.
         values: dict[str, list[float]] = {n: [] for n in self._continuous}
         cats: dict[str, list[str]] = {n: [] for n in self._categorical}
+        # The model-output node ("prediction") is NOT in ev.features; its value lives in
+        # ev.output / ev.prediction. Collect it explicitly so output drift is monitored.
+        output_is_categorical = (
+            OUTPUT_NODE in self.baseline.nodes
+            and self.baseline.nodes[OUTPUT_NODE].kind == "categorical"
+        )
         for ev in window.events:
             for node in self._continuous:
+                if node == OUTPUT_NODE:
+                    continue  # handled from ev.output below, never from ev.features
                 v = ev.features.get(node)
                 if v is not None and not isinstance(v, str):
                     values[node].append(float(v))
             for node in self._categorical:
+                if node == OUTPUT_NODE:
+                    continue  # handled from ev.prediction/ev.output below
                 v = ev.features.get(node)
                 if v is not None:
                     cats[node].append(str(v))
+            # Output node: a classifier's output is a discrete class label (categorical
+            # class-frequency PSI); a regressor's output is a numeric value (continuous).
+            if OUTPUT_NODE in self.baseline.nodes:
+                if output_is_categorical:
+                    label = _event_class_label(ev)
+                    if label is not None:
+                        cats.setdefault(OUTPUT_NODE, []).append(label)
+                elif ev.output is not None:
+                    values.setdefault(OUTPUT_NODE, []).append(float(ev.output))
 
         drift = detect_drift(values, cats, self.baseline, self.config, window_id=window_id)
         rca = analyze(drift, self.graph)

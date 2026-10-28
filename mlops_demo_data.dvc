@@ -1,0 +1,6 @@
+outs:
+- md5: 0856917fce84a1539b667b5c185a1f24.dir
+  size: 1342735
+  nfiles: 21
+  hash: md5
+  path: mlops_demo_data

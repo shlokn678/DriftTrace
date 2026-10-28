@@ -1,0 +1,112 @@
+{
+  "generated_at": "2026-10-27T08:51:19.412758+00:00",
+  "n_models": 5,
+  "all_valid": true,
+  "models": [
+    {
+      "model": "breast_cancer_logistic",
+      "status": "pass",
+      "reason": "",
+      "row_counts": {
+        "reference.csv": 569,
+        "stable.csv": 300,
+        "drift.csv": 300
+      },
+      "feature_count": 30,
+      "columns_match": true,
+      "task": "classification",
+      "algorithm": "Pipeline(StandardScaler, LogisticRegression)",
+      "metrics": {
+        "accuracy": 0.986013986013986,
+        "precision": 0.9888888888888889,
+        "recall": 0.9888888888888889,
+        "f1": 0.9888888888888889,
+        "roc_auc": 0.9976939203354298
+      }
+    },
+    {
+      "model": "wine_random_forest",
+      "status": "pass",
+      "reason": "",
+      "row_counts": {
+        "reference.csv": 178,
+        "stable.csv": 178,
+        "drift.csv": 178
+      },
+      "feature_count": 13,
+      "columns_match": true,
+      "task": "classification",
+      "algorithm": "RandomForestClassifier",
+      "metrics": {
+        "accuracy": 1.0,
+        "precision_macro": 1.0,
+        "recall_macro": 1.0,
+        "f1_macro": 1.0,
+        "f1_weighted": 1.0,
+        "roc_auc_ovr": 1.0
+      }
+    },
+    {
+      "model": "digits_extra_trees",
+      "status": "pass",
+      "reason": "",
+      "row_counts": {
+        "reference.csv": 1797,
+        "stable.csv": 300,
+        "drift.csv": 300
+      },
+      "feature_count": 61,
+      "columns_match": true,
+      "task": "classification",
+      "algorithm": "ExtraTreesClassifier",
+      "metrics": {
+        "accuracy": 0.98,
+        "precision_macro": 0.9805343344672008,
+        "recall_macro": 0.9795315133131108,
+        "f1_macro": 0.9796086348004833,
+        "f1_weighted": 0.9798153477268948,
+        "roc_auc_ovr": 0.9995825079145012
+      }
+    },
+    {
+      "model": "synthetic_gradient_boosting",
+      "status": "pass",
+      "reason": "",
+      "row_counts": {
+        "reference.csv": 2000,
+        "stable.csv": 300,
+        "drift.csv": 300
+      },
+      "feature_count": 8,
+      "columns_match": true,
+      "task": "classification",
+      "algorithm": "GradientBoostingClassifier",
+      "metrics": {
+        "accuracy": 0.932,
+        "precision": 0.9251968503937008,
+        "recall": 0.94,
+        "f1": 0.9325396825396826,
+        "roc_auc": 0.974448
+      }
+    },
+    {
+      "model": "synthetic_regression",
+      "status": "pass",
+      "reason": "",
+      "row_counts": {
+        "reference.csv": 2000,
+        "stable.csv": 300,
+        "drift.csv": 300
+      },
+      "feature_count": 8,
+      "columns_match": true,
+      "task": "regression",
+      "algorithm": "GradientBoostingRegressor",
+      "metrics": {
+        "r2": 0.9562192604375447,
+        "mae": 21.874213466992778,
+        "rmse": 29.02383209650434
+      }
+    }
+  ]
+}
